@@ -43,30 +43,63 @@ def get_stream_info(url):
     except Exception as e:
         return {"status": "error", "msg": str(e)}
 
+def scte_listener(port: int, stop_event: threading.Event, loop, websocket_client):
+    reader = UDPReader(port)
+    st = threefive.Stream(reader)
+    
+    def on_scte(cue):
+        if stop_event.is_set(): return
+        data_json = json.loads(cue.get_json())
+        asyncio.run_coroutine_threadsafe(
+            websocket_client.send_json({"type": "scte_data", "data": data_json}), loop
+        )
+        
+    try:
+        while not stop_event.is_set():
+            st.decode(func=on_scte)
+    except Exception:
+        pass
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     proc = None
+    stop_event = threading.Event()
+    loop = asyncio.get_running_loop()
+    
     try:
         while True:
             data = await websocket.receive_json()
             if data["action"] == "play":
                 url = data["url"]
+                stop_event.clear()
+                
                 info = get_stream_info(url)
                 await websocket.send_json({"type": "info", "data": info})
                 
                 if info["status"] == "error": continue
                 
-                # Jalankan FFmpeg untuk routing ke MediaMTX HLS
+                # FFmpeg Splitter: Jalur 1 ke MediaMTX (Web), Jalur 2 ke UDP Local untuk SCTE Parser
                 cmd = [
                     "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
-                    "-map", "0:v?", "-map", "0:a?", "-c", "copy", "-f", "rtsp", "rtsp://mediamtx:8554/live"
+                    "-map", "0:v?", "-map", "0:a?", "-c", "copy", "-f", "rtsp", "rtsp://mediamtx:8554/live",
+                    "-map", "0", "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
                 ]
                 proc = subprocess.Popen(cmd)
+                
+                # Jalankan SCTE Thread di latar belakang
+                threading.Thread(
+                    target=scte_listener, 
+                    args=(9999, stop_event, loop, websocket), 
+                    daemon=True
+                ).start()
+                
                 await websocket.send_json({"type": "ready"})
                 
             elif data["action"] == "stop":
+                stop_event.set()
                 if proc: proc.terminate()
                 await websocket.send_json({"type": "stopped"})
     except WebSocketDisconnect:
+        stop_event.set()
         if proc: proc.terminate()

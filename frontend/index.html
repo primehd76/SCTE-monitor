@@ -2,27 +2,62 @@
 <html lang="id">
 <head>
     <meta charset="UTF-8">
-    <title>Simple SCTE Monitor</title>
+    <title>SCTE-35 Master Monitor</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
-<body class="bg-gray-900 text-white h-screen flex flex-col p-4 gap-4">
+<body class="bg-gray-900 text-white h-screen flex flex-col p-4 gap-4 overflow-hidden">
+    <!-- Top Bar -->
     <div class="flex gap-2">
-        <input id="url" type="text" value="rtmp://172.16.72.23/static/SCTE" class="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 rounded text-sm">
-        <button id="play" class="bg-green-600 px-6 py-2 rounded font-bold text-sm">PLAY</button>
-        <button id="stop" class="bg-red-600 px-6 py-2 rounded font-bold text-sm hidden">STOP</button>
+        <input id="url" type="text" value="rtmp://172.16.72.23/static/SCTE" class="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 rounded text-sm focus:outline-none focus:border-blue-500">
+        <button id="play" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded font-bold text-sm transition">PLAY</button>
+        <button id="stop" class="bg-red-600 hover:bg-red-500 px-6 py-2 rounded font-bold text-sm hidden transition">STOP</button>
     </div>
 
-    <div class="flex-1 flex gap-4">
-        <div class="w-7/12 bg-black rounded flex items-center justify-center relative overflow-hidden">
-            <span id="placeholder" class="text-gray-500 font-bold">NO SIGNAL</span>
-            <video id="video" controls autoplay muted class="absolute inset-0 w-full h-full hidden"></video>
+    <!-- Main Content -->
+    <div class="flex-1 flex gap-4 overflow-hidden">
+        <!-- Left: Preview -->
+        <div class="w-7/12 flex flex-col gap-4">
+            <div class="flex-1 bg-black rounded border border-gray-800 flex items-center justify-center relative overflow-hidden">
+                <span id="placeholder" class="text-gray-600 font-bold tracking-widest">NO SIGNAL</span>
+                <video id="video" controls autoplay muted class="absolute inset-0 w-full h-full hidden object-contain"></video>
+            </div>
         </div>
-        <div class="w-5/12 bg-gray-800 p-4 rounded flex flex-col gap-2">
-            <h2 class="font-bold border-b border-gray-700 pb-2">INFO</h2>
-            <div>Format: <span id="f-fmt" class="text-blue-400 font-bold">-</span></div>
-            <div>Video Codec: <span id="f-vcodec" class="text-green-400 font-bold">-</span></div>
-            <div>Audio Codec: <span id="f-acodec" class="text-yellow-400 font-bold">-</span></div>
+
+        <!-- Right: Info & SCTE Logs -->
+        <div class="w-5/12 flex flex-col gap-4">
+            <!-- Info Box -->
+            <div class="bg-gray-800 border border-gray-700 p-4 rounded flex flex-col gap-2 text-sm">
+                <h2 class="font-bold border-b border-gray-700 pb-2 text-gray-400">STREAM INFO</h2>
+                <div class="flex justify-between"><span>Format:</span> <span id="f-fmt" class="text-blue-400 font-bold">-</span></div>
+                <div class="flex justify-between"><span>Video Codec:</span> <span id="f-vcodec" class="text-green-400 font-bold">-</span></div>
+                <div class="flex justify-between"><span>Audio Codec:</span> <span id="f-acodec" class="text-yellow-400 font-bold">-</span></div>
+                <div class="flex justify-between items-center pt-2 border-t border-gray-700">
+                    <span>SCTE-35 Status:</span> 
+                    <span id="scte-status" class="bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded font-bold">WAITING</span>
+                </div>
+            </div>
+
+            <!-- SCTE Logs Table -->
+            <div class="flex-1 bg-gray-800 border border-gray-700 rounded flex flex-col overflow-hidden">
+                <div class="bg-gray-900 p-3 border-b border-gray-700 flex justify-between items-center text-xs">
+                    <span class="font-bold text-gray-400">SCTE-35 EVENT LOGS</span>
+                    <button onclick="document.getElementById('log-body').innerHTML=''" class="bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">Clear</button>
+                </div>
+                <div class="flex-1 overflow-y-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-gray-900/50 text-gray-400 sticky top-0">
+                            <tr>
+                                <th class="p-2">Time</th>
+                                <th class="p-2">Event ID</th>
+                                <th class="p-2">Type</th>
+                                <th class="p-2">Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody id="log-body" class="divide-y divide-gray-700"></tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -48,11 +83,13 @@
 
         ws.onmessage = (e) => {
             const msg = JSON.parse(e.data);
+            
             if(msg.type === "info" && msg.data.status === "ok") {
                 document.getElementById('f-fmt').innerText = msg.data.format;
                 document.getElementById('f-vcodec').innerText = msg.data.vcodec;
                 document.getElementById('f-acodec').innerText = msg.data.acodec;
-            } else if(msg.type === "ready") {
+            } 
+            else if(msg.type === "ready") {
                 const hlsUrl = `http://${window.location.hostname}:8888/live/index.m3u8`;
                 video.classList.remove('hidden');
                 document.getElementById('placeholder').classList.add('hidden');
@@ -65,6 +102,31 @@
                         hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
                     }
                 }, 2000);
+            }
+            else if(msg.type === "scte_data") {
+                // Indikator SCTE berkedip hijau
+                const statusBadge = document.getElementById('scte-status');
+                statusBadge.innerText = "CUE DETECTED";
+                statusBadge.className = "bg-green-600 text-white text-xs px-2 py-1 rounded font-bold animate-pulse";
+                setTimeout(() => {
+                    statusBadge.innerText = "WAITING";
+                    statusBadge.className = "bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded font-bold";
+                }, 2000);
+
+                // Masukkan ke tabel log
+                const data = msg.data.info || msg.data;
+                const time = new Date().toLocaleTimeString();
+                const eventId = data.splice_event_id || "N/A";
+                const type = data.out_of_network_indicator ? "START (OUT)" : "END (IN)";
+                const duration = data.break_duration ? (data.break_duration / 90000).toFixed(1) + "s" : "-";
+
+                const row = `<tr class="hover:bg-gray-700/50">
+                    <td class="p-2 text-gray-400">${time}</td>
+                    <td class="p-2 font-mono text-blue-400">${eventId}</td>
+                    <td class="p-2 font-bold ${data.out_of_network_indicator ? 'text-red-400' : 'text-green-400'}">${type}</td>
+                    <td class="p-2">${duration}</td>
+                </tr>`;
+                document.getElementById('log-body').insertAdjacentHTML('afterbegin', row);
             }
         };
     </script>
