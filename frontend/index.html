@@ -134,7 +134,11 @@
                 }
             } 
             else if (msg.type === "player_ready") {
-                player.src = msg.url;
+                // Ambil IP server Ubuntu otomatis dari address bar browser
+                const serverIP = window.location.hostname;
+                // Paksa iframe mengarah ke IP server, bukan localhost
+                player.src = `http://${serverIP}:8889/live`; 
+
                 player.classList.remove('hidden');
                 placeholder.classList.add('hidden');
             }
