@@ -3,110 +3,89 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SCTE-35 & Stream Dashboard</title>
+    <title>SCTE-35 Master Monitor</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- HLS.js untuk Player -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <!-- Chart.js untuk Grafik -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { background-color: #f3f4f6; color: #1f2937; font-family: 'Inter', sans-serif; }
-        .card { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e5e7eb; }
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+        body { background-color: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+        .panel { background-color: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; }
     </style>
 </head>
 <body class="h-screen flex flex-col">
 
-    <!-- Navbar -->
-    <header class="bg-white p-4 shadow-sm flex justify-between items-center border-b border-gray-200">
-        <h1 class="text-xl font-bold text-gray-800 flex items-center">
-            <span class="bg-blue-600 text-white px-2 py-1 rounded mr-2 text-sm">PRO</span> SCTE-35 MONITOR
-        </h1>
-        <div class="flex items-center space-x-2 text-sm font-semibold">
-            <span id="conn-status" class="w-3 h-3 rounded-full bg-red-500"></span>
-            <span class="text-gray-600">ENGINE ONLINE</span>
+    <!-- Header -->
+    <header class="bg-slate-900 p-4 border-b border-slate-800 flex justify-between items-center shadow-md">
+        <h1 class="text-xl font-black tracking-wider text-blue-400">SCTE-35 MONITOR</h1>
+        <div class="flex items-center space-x-2">
+            <span id="conn-status" class="w-3 h-3 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
+            <span class="text-xs font-bold text-slate-300">WEBSOCKET STATUS</span>
         </div>
     </header>
 
     <div class="flex-1 p-4 flex flex-col lg:flex-row gap-4 overflow-hidden">
         
-        <!-- Kolom Kiri: Player & Input -->
+        <!-- Kiri: Player & Control -->
         <div class="w-full lg:w-7/12 flex flex-col gap-4">
             
-            <!-- Controls Box -->
-            <div class="card p-4 flex flex-col md:flex-row gap-2">
-                <input type="text" id="stream-url" placeholder="udp://... atau srt://... atau rtmp://..." class="flex-1 border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
-                <button id="btn-run" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded font-bold text-sm">▶ Start</button>
-                <button id="btn-stop" class="bg-red-100 text-red-600 hover:bg-red-200 border border-red-300 px-6 py-2 rounded font-bold text-sm hidden">■ Stop</button>
+            <div class="panel p-4 flex gap-2">
+                <input type="text" id="stream-url" placeholder="Enter URL (rtmp://, srt://, udp://)" class="flex-1 bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
+                <button id="btn-play" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-2 rounded text-sm transition">PLAY</button>
+                <button id="btn-stop" class="bg-red-600 hover:bg-red-500 text-white font-bold px-6 py-2 rounded text-sm transition hidden">STOP</button>
             </div>
 
-            <!-- Video Player -->
-            <div class="card flex-1 bg-black relative overflow-hidden flex items-center justify-center min-h-[400px]">
-                <span id="player-placeholder" class="text-gray-500 font-bold tracking-widest z-10">NO SIGNAL</span>
-                <video id="video-player" controls autoplay muted class="absolute inset-0 w-full h-full hidden object-contain"></video>
-            </div>
-            
-            <!-- Tab Mirip Flussonic -->
-            <div class="flex gap-2">
-                <span class="bg-blue-600 text-white text-xs px-4 py-1 rounded font-bold">HLS</span>
-                <span class="bg-gray-200 text-gray-600 text-xs px-4 py-1 rounded font-bold">MSE</span>
+            <div class="panel flex-1 bg-black relative flex items-center justify-center overflow-hidden min-h-[300px]">
+                <span id="player-placeholder" class="text-slate-600 font-bold tracking-widest text-lg">PREVIEW MONITOR</span>
+                <video id="video-player" controls autoplay muted class="absolute inset-0 w-full h-full hidden"></video>
             </div>
         </div>
 
-        <!-- Kolom Kanan: Media Info & Logs -->
+        <!-- Kanan: Info & Logs -->
         <div class="w-full lg:w-5/12 flex flex-col gap-4">
             
-            <!-- Media Info Box -->
-            <div class="card p-4">
-                <div class="flex justify-between items-center border-b pb-2 mb-3">
-                    <h2 class="font-bold text-gray-700 text-sm flex items-center">
-                        <span class="w-2 h-2 rounded-full bg-green-500 mr-2"></span> Input Media Info
-                    </h2>
-                    <span id="info-bitrate" class="text-sm font-bold text-gray-600">- Kbps</span>
+            <!-- Metadata Panel -->
+            <div class="panel p-4 grid grid-cols-2 gap-4">
+                <h2 class="col-span-2 font-bold text-slate-400 border-b border-slate-700 pb-2 text-sm">STREAM METADATA</h2>
+                
+                <div>
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Format</div>
+                    <div id="val-format" class="text-lg font-bold text-white">-</div>
                 </div>
-                <div class="space-y-2 text-sm font-mono text-gray-600">
-                    <div>
-                        <span class="text-blue-600 font-bold">v1</span> 
-                        <span id="info-vcodec">H264</span> 
-                        <span id="info-format">1920x1080</span> 
-                        <span class="text-gray-400 text-xs">pid:</span> <span id="info-vpid" class="text-blue-600 font-bold">-</span>
-                    </div>
-                    <div>
-                        <span class="text-red-600 font-bold">a1</span> 
-                        <span id="info-acodec">AAC</span> 
-                        <span class="text-gray-400 text-xs">pid:</span> <span id="info-apid" class="text-red-600 font-bold">-</span>
-                    </div>
-                    <div>
-                        <span class="text-purple-600 font-bold">d1</span> 
-                        <span>scte35</span> 
-                        <span class="text-gray-400 text-xs">status:</span> <span id="info-scte" class="badge bg-gray-200 text-gray-500 ml-1">WAITING</span>
-                    </div>
+                <div>
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Bandwidth</div>
+                    <div id="val-bw" class="text-lg font-bold text-blue-400">-</div>
+                </div>
+                <div>
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Video Codec</div>
+                    <div id="val-vcodec" class="text-lg font-bold text-white">-</div>
+                </div>
+                <div>
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Audio Codec</div>
+                    <div id="val-acodec" class="text-lg font-bold text-white">-</div>
+                </div>
+                <div class="col-span-2 bg-slate-900 p-3 rounded flex justify-between items-center border border-slate-800">
+                    <span class="text-xs font-bold text-slate-400 uppercase">SCTE-35 Presence</span>
+                    <span id="val-scte-status" class="text-xs font-bold px-3 py-1 bg-slate-800 text-slate-500 rounded">WAITING TRIGGER</span>
                 </div>
             </div>
 
-            <!-- Bitrate Chart -->
-            <div class="card p-4 h-48 relative">
-                <canvas id="bitrateChart"></canvas>
-            </div>
-
-            <!-- SCTE Logs -->
-            <div class="card flex-1 flex flex-col overflow-hidden">
-                <div class="bg-gray-50 p-3 border-b border-gray-200 flex justify-between items-center">
-                    <h2 class="font-bold text-sm text-gray-700">SCTE-35 Event Logs</h2>
-                    <button onclick="document.getElementById('log-body').innerHTML=''" class="text-xs text-gray-500 hover:text-gray-700">Clear</button>
+            <!-- Log Panel -->
+            <div class="panel flex-1 flex flex-col overflow-hidden">
+                <div class="bg-slate-800 p-3 flex justify-between items-center border-b border-slate-700">
+                    <h2 class="font-bold text-slate-300 text-sm">SCTE-35 EVENT LOGS</h2>
+                    <button onclick="document.getElementById('log-body').innerHTML=''" class="text-[10px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-white">CLEAR LOGS</button>
                 </div>
-                <div class="flex-1 overflow-y-auto">
+                <div class="flex-1 overflow-y-auto p-0">
                     <table class="w-full text-left text-xs">
-                        <thead class="bg-gray-100 text-gray-600 sticky top-0">
+                        <thead class="bg-slate-900 text-slate-400 sticky top-0">
                             <tr>
-                                <th class="p-2 pl-4">Time</th>
-                                <th class="p-2">Event ID</th>
-                                <th class="p-2">Type</th>
-                                <th class="p-2">Duration</th>
+                                <th class="p-3">Time</th>
+                                <th class="p-3">Event ID</th>
+                                <th class="p-3">Type</th>
+                                <th class="p-3">Duration</th>
                             </tr>
                         </thead>
-                        <tbody id="log-body" class="divide-y divide-gray-100">
-                            <!-- Logs here -->
+                        <tbody id="log-body" class="divide-y divide-slate-800/50">
+                            <!-- Injected rows -->
                         </tbody>
                     </table>
                 </div>
@@ -120,44 +99,26 @@
         const video = document.getElementById('video-player');
         let hlsInstance = null;
 
-        // Chart.js Setup
-        const ctx = document.getElementById('bitrateChart').getContext('2d');
-        const chart = new Chart(ctx, {
-            type: 'line',
-            data: { labels: [], datasets: [{ label: 'Simulated In/Out Mbps', data: [], borderColor: '#2563eb', borderWidth: 2, pointRadius: 0, fill: true, backgroundColor: 'rgba(37, 99, 235, 0.1)' }] },
-            options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { x: { display: false }, y: { beginAtZero: true, grid: { color: '#f3f4f6' } } }, plugins: { legend: { display: false } } }
-        });
-
-        // Simulasi pergerakan chart agar mirip flussonic
-        setInterval(() => {
-            if(!document.getElementById('btn-run').classList.contains('hidden')) return;
-            const time = new Date().toLocaleTimeString();
-            const val = Math.random() * 2 + 8; // Random 8-10 Mbps
-            chart.data.labels.push(time);
-            chart.data.datasets[0].data.push(val);
-            if(chart.data.labels.length > 20) { chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
-            chart.update();
-        }, 1000);
-
         ws.onopen = () => document.getElementById('conn-status').classList.replace('bg-red-500', 'bg-green-500');
         ws.onclose = () => document.getElementById('conn-status').classList.replace('bg-green-500', 'bg-red-500');
 
-        document.getElementById('btn-run').onclick = () => {
+        document.getElementById('btn-play').onclick = () => {
             ws.send(JSON.stringify({action: "play", url: document.getElementById('stream-url').value}));
-            document.getElementById('btn-run').classList.add('hidden');
+            document.getElementById('btn-play').classList.add('hidden');
             document.getElementById('btn-stop').classList.remove('hidden');
         };
 
         document.getElementById('btn-stop').onclick = () => {
             ws.send(JSON.stringify({action: "stop"}));
-            document.getElementById('btn-run').classList.remove('hidden');
+            document.getElementById('btn-play').classList.remove('hidden');
             document.getElementById('btn-stop').classList.add('hidden');
-            if(hlsInstance) { hlsInstance.destroy(); }
+            if(hlsInstance) hlsInstance.destroy();
             video.classList.add('hidden');
             document.getElementById('player-placeholder').classList.remove('hidden');
-            
-            // Reset Chart
-            chart.data.labels = []; chart.data.datasets[0].data = []; chart.update();
+            document.getElementById('val-format').innerText = "-";
+            document.getElementById('val-vcodec').innerText = "-";
+            document.getElementById('val-acodec').innerText = "-";
+            document.getElementById('val-bw').innerText = "-";
         };
 
         ws.onmessage = (event) => {
@@ -165,73 +126,51 @@
             
             if (msg.type === "stream_info") {
                 if (msg.data.status === "ok") {
-                    document.getElementById('info-format').innerText = msg.data.format;
-                    document.getElementById('info-vcodec').innerText = msg.data.video_codec;
-                    document.getElementById('info-vpid').innerText = msg.data.video_pid || 'N/A';
-                    document.getElementById('info-acodec').innerText = msg.data.audio_codec;
-                    document.getElementById('info-apid').innerText = msg.data.audio_pid || 'N/A';
-                    document.getElementById('info-bitrate').innerText = msg.data.bitrate;
+                    document.getElementById('val-format').innerText = msg.data.format;
+                    document.getElementById('val-vcodec').innerText = msg.data.video_codec;
+                    document.getElementById('val-acodec').innerText = msg.data.audio_codec;
+                    document.getElementById('val-bw').innerText = msg.data.bandwidth;
                 }
             } 
             else if (msg.type === "player_ready") {
-                // 1. Perbaikan nama file bawaan MediaMTX menjadi index.m3u8
                 const hlsUrl = `http://${window.location.hostname}:8888/live/index.m3u8`;
-                
                 video.classList.remove('hidden');
                 document.getElementById('player-placeholder').classList.add('hidden');
 
-                // 2. Beri jeda 2 detik agar MediaMTX selesai meng-generate HLS dari RTMP
+                // Jeda 2 detik agar MediaMTX selesai compile m3u8 file
                 setTimeout(() => {
                     if (Hls.isSupported()) {
                         if(hlsInstance) hlsInstance.destroy();
-                        
-                        // Tambahkan fitur Auto-Retry jika frame pertama belum siap
-                        hlsInstance = new Hls({ 
-                            maxLiveSyncPlaybackRate: 1.5,
-                            manifestLoadingMaxRetry: 10,       // Coba 10x
-                            manifestLoadingRetryDelay: 1000    // Jeda 1 detik tiap coba
-                        });
-                        
+                        hlsInstance = new Hls({ manifestLoadingMaxRetry: 10, manifestLoadingRetryDelay: 1000 });
                         hlsInstance.loadSource(hlsUrl);
                         hlsInstance.attachMedia(video);
-                        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(e => console.log("Auto-play diblokir browser")));
-                        
-                        // Error Handling agar tidak stuck (muter-muter)
-                        hlsInstance.on(Hls.Events.ERROR, function (event, data) {
+                        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(()=>console.log("Autoplay blocked")));
+                        hlsInstance.on(Hls.Events.ERROR, function(event, data) {
                             if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                                console.warn("HLS belum siap, mencoba lagi...");
                                 hlsInstance.startLoad();
                             }
                         });
-                        
-                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                        video.src = hlsUrl;
-                        video.addEventListener('loadedmetadata', () => video.play());
                     }
-                }, 2000); // Delay 2 detik sebelum narik video
+                }, 2000);
             }
             else if (msg.type === "scte_data") {
-                const scteInd = document.getElementById('info-scte');
-                scteInd.innerText = "CUE INJECTED";
-                scteInd.classList.replace('bg-gray-200', 'bg-purple-100');
-                scteInd.classList.replace('text-gray-500', 'text-purple-700');
+                const badge = document.getElementById('val-scte-status');
+                badge.innerText = "CUE DETECTED!";
+                badge.className = "text-xs font-bold px-3 py-1 bg-green-900 text-green-400 rounded shadow-[0_0_10px_rgba(74,222,128,0.5)]";
                 setTimeout(() => {
-                    scteInd.innerText = "WAITING";
-                    scteInd.classList.replace('bg-purple-100', 'bg-gray-200');
-                    scteInd.classList.replace('text-purple-700', 'text-gray-500');
-                }, 2000);
+                    badge.innerText = "STANDBY";
+                    badge.className = "text-xs font-bold px-3 py-1 bg-blue-900 text-blue-400 rounded";
+                }, 3000);
 
                 const data = msg.data.info || msg.data;
-                const time = new Date().toLocaleTimeString();
-                const eventId = data.splice_event_id || "N/A";
-                const type = data.out_of_network_indicator ? "START" : "END";
+                const type = data.out_of_network_indicator ? "START/OUT" : "END/IN";
                 const dur = data.break_duration ? (data.break_duration / 90000).toFixed(1) + "s" : "-";
-
-                const row = `<tr>
-                    <td class="p-2 pl-4 text-gray-500">${time}</td>
-                    <td class="p-2 font-mono text-blue-600">${eventId}</td>
-                    <td class="p-2 font-bold ${data.out_of_network_indicator ? 'text-red-500' : 'text-green-500'}">${type}</td>
-                    <td class="p-2 text-gray-700">${dur}</td>
+                
+                const row = `<tr class="hover:bg-slate-800 transition">
+                    <td class="p-3 text-slate-400">${new Date().toLocaleTimeString()}</td>
+                    <td class="p-3 font-mono text-blue-400">${data.splice_event_id || "N/A"}</td>
+                    <td class="p-3 font-bold ${data.out_of_network_indicator ? 'text-red-400' : 'text-green-400'}">${type}</td>
+                    <td class="p-3 text-slate-300">${dur}</td>
                 </tr>`;
                 document.getElementById('log-body').insertAdjacentHTML('afterbegin', row);
             }
