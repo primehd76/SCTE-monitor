@@ -24,12 +24,16 @@ class UDPReader:
         return self.sock.recvfrom(size)[0]
 
 def probe_stream(url):
+    if not url:
+        return {"status": "error", "msg": "URL tidak boleh kosong!"}
     cmd = [
         "ffprobe", "-v", "quiet", "-print_format", "json",
         "-show_streams", "-show_format", "-timeout", "5000000", url
     ]
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        if result.returncode != 0:
+            return {"status": "error", "msg": "Stream tidak dapat dijangkau / URL salah"}
         data = json.loads(result.stdout)
         
         video_info = next((s for s in data.get('streams', []) if s['codec_type'] == 'video'), None)
