@@ -1,17 +1,17 @@
 services:
   mediamtx:
     image: bluenviron/mediamtx:latest
-    container_name: mediamtx-server
+    container_name: sm_mediamtx
     restart: always
     ports:
-      - "8888:8888" # HLS Web Player Port
-      - "8554:8554" # RTSP Ingest Port
+      - "8888:8888" # HLS Port
+      - "8554:8554" # RTSP Port
     
   backend:
     build: ./backend
-    container_name: scte-backend
+    container_name: sm_backend
     restart: always
     ports:
-      - "8000:8000" # API & UI Port
+      - "8000:8000"
     volumes:
       - ./frontend:/app/frontend
