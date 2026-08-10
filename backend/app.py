@@ -80,10 +80,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 if info["status"] == "error": continue
                 
                 # FFmpeg Splitter: Jalur 1 ke MediaMTX (Web), Jalur 2 ke UDP Local untuk SCTE Parser
+                # Perintah FFmpeg yang digabung langsung (Muxing) agar HLS MediaMTX tidak pecah track
                 cmd = [
                     "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
-                    "-map", "0:v?", "-map", "0:a?", "-c", "copy", "-f", "rtsp", "rtsp://mediamtx:8554/live",
-                    "-map", "0", "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
+                    "-c:v", "copy", "-c:a", "aac", 
+                    "-f", "rtsp", "rtsp://mediamtx:8554/live"
                 ]
                 proc = subprocess.Popen(cmd)
                 
