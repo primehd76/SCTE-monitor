@@ -24,13 +24,12 @@ class UDPReader:
         return self.sock.recvfrom(size)[0]
 
 def probe_stream(url):
-    """Mengecek format video (Codec, Resolusi, Interlaced/Progressive, FPS)"""
     cmd = [
         "ffprobe", "-v", "quiet", "-print_format", "json",
-        "-show_streams", url
+        "-show_streams", "-show_format", "-timeout", "5000000", url
     ]
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
         data = json.loads(result.stdout)
         
         video_info = next((s for s in data.get('streams', []) if s['codec_type'] == 'video'), None)
@@ -38,19 +37,34 @@ def probe_stream(url):
         
         if not video_info: return {"status": "error", "msg": "No video stream found"}
 
-        # Menghitung FPS & Format (misal: 1080i50)
+        # Resolusi & FPS
         fps_parts = video_info.get('r_frame_rate', '25/1').split('/')
         fps = int(fps_parts[0]) // int(fps_parts[1]) if len(fps_parts) == 2 and fps_parts[1] != '0' else 25
         interlaced = "i" if video_info.get('field_order', 'progressive') != 'progressive' else "p"
-        height = video_info.get('height', 'unknown')
+        res = f"{video_info.get('width', '')}x{video_info.get('height', '')}"
         
-        format_str = f"{height}{interlaced}{fps}"
+        # Ekstraksi PID (biasanya format Hex di FFprobe, misal 0x100. Kita convert ke Int jika ada)
+        v_pid_hex = video_info.get('id', 'N/A')
+        v_pid = str(int(v_pid_hex, 16)) if v_pid_hex != 'N/A' and v_pid_hex.startswith('0x') else v_pid_hex
         
+        a_pid = "N/A"
+        if audio_info:
+            a_pid_hex = audio_info.get('id', 'N/A')
+            a_pid = str(int(a_pid_hex, 16)) if a_pid_hex != 'N/A' and a_pid_hex.startswith('0x') else a_pid_hex
+
+        # Ekstraksi Bitrate (Kbps)
+        format_info = data.get('format', {})
+        bitrate_bps = int(format_info.get('bit_rate', 0))
+        bitrate_kbps = f"{bitrate_bps // 1000} Kbps" if bitrate_bps > 0 else "N/A"
+
         return {
             "status": "ok",
-            "format": format_str,
+            "format": f"{res}{interlaced}{fps}",
             "video_codec": video_info.get('codec_name', '').upper(),
-            "audio_codec": audio_info.get('codec_name', '').upper() if audio_info else "NONE"
+            "video_pid": v_pid,
+            "audio_codec": audio_info.get('codec_name', '').upper() if audio_info else "NONE",
+            "audio_pid": a_pid,
+            "bitrate": bitrate_kbps
         }
     except Exception as e:
         return {"status": "error", "msg": str(e)}

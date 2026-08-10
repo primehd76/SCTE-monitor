@@ -6,14 +6,15 @@ services:
     container_name: mediamtx
     restart: always
     ports:
+      - "8888:8888" # HLS Port (BARU)
       - "8889:8889" # WebRTC Port
-      - "8554:8554" # RTSP Port untuk ingest
+      - "8554:8554" # RTSP Port
     
   backend:
     build: ./backend
     container_name: broadcast-backend
     restart: always
     ports:
-      - "8000:8000" # API & Frontend Port
+      - "8000:8000"
     volumes:
-      - ./frontend:/app/frontend # Mount UI agar gampang diedit
+      - ./frontend:/app/frontend
