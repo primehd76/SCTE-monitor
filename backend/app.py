@@ -81,9 +81,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 # FFmpeg Splitter: Jalur 1 ke MediaMTX (Web), Jalur 2 ke UDP Local untuk SCTE Parser
                 # Perintah FFmpeg yang digabung langsung (Muxing) agar HLS MediaMTX tidak pecah track
+                # Mode Pure Copy: Tanpa transcode sama sekali, persis seperti VLC
                 cmd = [
                     "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
-                    "-c:v", "copy", "-c:a", "aac", 
+                    "-c", "copy", 
                     "-f", "rtsp", "rtsp://mediamtx:8554/live"
                 ]
                 proc = subprocess.Popen(cmd)
