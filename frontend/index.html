@@ -174,20 +174,41 @@
                 }
             } 
             else if (msg.type === "player_ready") {
-                const hlsUrl = `http://${window.location.hostname}:8888/live/stream.m3u8`;
+                // 1. Perbaikan nama file bawaan MediaMTX menjadi index.m3u8
+                const hlsUrl = `http://${window.location.hostname}:8888/live/index.m3u8`;
+                
                 video.classList.remove('hidden');
                 document.getElementById('player-placeholder').classList.add('hidden');
 
-                if (Hls.isSupported()) {
-                    if(hlsInstance) hlsInstance.destroy();
-                    hlsInstance = new Hls({ maxLiveSyncPlaybackRate: 1.5 });
-                    hlsInstance.loadSource(hlsUrl);
-                    hlsInstance.attachMedia(video);
-                    hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(e => console.log(e)));
-                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                    video.src = hlsUrl;
-                    video.addEventListener('loadedmetadata', () => video.play());
-                }
+                // 2. Beri jeda 2 detik agar MediaMTX selesai meng-generate HLS dari RTMP
+                setTimeout(() => {
+                    if (Hls.isSupported()) {
+                        if(hlsInstance) hlsInstance.destroy();
+                        
+                        // Tambahkan fitur Auto-Retry jika frame pertama belum siap
+                        hlsInstance = new Hls({ 
+                            maxLiveSyncPlaybackRate: 1.5,
+                            manifestLoadingMaxRetry: 10,       // Coba 10x
+                            manifestLoadingRetryDelay: 1000    // Jeda 1 detik tiap coba
+                        });
+                        
+                        hlsInstance.loadSource(hlsUrl);
+                        hlsInstance.attachMedia(video);
+                        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(e => console.log("Auto-play diblokir browser")));
+                        
+                        // Error Handling agar tidak stuck (muter-muter)
+                        hlsInstance.on(Hls.Events.ERROR, function (event, data) {
+                            if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                                console.warn("HLS belum siap, mencoba lagi...");
+                                hlsInstance.startLoad();
+                            }
+                        });
+                        
+                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        video.src = hlsUrl;
+                        video.addEventListener('loadedmetadata', () => video.play());
+                    }
+                }, 2000); // Delay 2 detik sebelum narik video
             }
             else if (msg.type === "scte_data") {
                 const scteInd = document.getElementById('info-scte');
