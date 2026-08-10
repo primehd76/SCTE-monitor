@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    restart: always
+    ports:
+      - "8889:8889" # WebRTC Port
+      - "8554:8554" # RTSP Port untuk ingest
+    
+  backend:
+    build: ./backend
+    container_name: broadcast-backend
+    restart: always
+    ports:
+      - "8000:8000" # API & Frontend Port
+    volumes:
+      - ./frontend:/app/frontend # Mount UI agar gampang diedit
