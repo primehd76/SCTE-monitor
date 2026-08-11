@@ -63,6 +63,8 @@
       hls = new Hls({liveSyncDurationCount: 3, maxLiveSyncPlaybackRate: 1.5});
       hls.attachMedia(video);
       hls.on(Hls.Events.MEDIA_ATTACHED, () => hls.loadSource(url));
+      hls.on(Hls.Events.MANIFEST_LOADED, () => setStatus('Preview manifest terbaca. Menunggu segment...'));
+      hls.on(Hls.Events.FRAG_LOADED, () => setStatus('Preview segment terbaca. Menyiapkan video...'));
       hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => setStatus('Preview siap, klik play di player.')));
       hls.on(Hls.Events.ERROR, (_, d) => {
         if (!d.fatal) return;
@@ -71,6 +73,7 @@
         if (d.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
       });
     }
+    video.addEventListener('playing', () => setStatus('Preview aktif.'));
     function stopPlayer() { if (hls) { hls.destroy(); hls = null; } video.pause(); video.removeAttribute('src'); video.load(); video.classList.add('hidden'); $('placeholder').classList.remove('hidden'); }
     function addLog(data) {
       const info = data.info || data, out = Boolean(info.out_of_network_indicator), duration = info.break_duration ? `${(info.break_duration / 90000).toFixed(1)}s` : '-';

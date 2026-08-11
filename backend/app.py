@@ -233,16 +233,17 @@ def stop_process(proc):
             proc.kill()
 
 
-def reset_hls_live_dir():
-    live_dir = HLS_ROOT / "live"
+def reset_hls_session_dir():
+    session_name = f"live-{int(time.time() * 1000)}"
+    live_dir = HLS_ROOT / session_name
     resolved_root = HLS_ROOT.resolve()
-    if live_dir.exists():
-        resolved_live = live_dir.resolve()
-        if resolved_root not in resolved_live.parents:
-            raise RuntimeError("Path HLS tidak aman untuk dibersihkan")
-        shutil.rmtree(live_dir)
+    for child in HLS_ROOT.iterdir():
+        if child.is_dir() and child.name.startswith("live-"):
+            resolved_child = child.resolve()
+            if resolved_root in resolved_child.parents:
+                shutil.rmtree(child, ignore_errors=True)
     live_dir.mkdir(parents=True, exist_ok=True)
-    return live_dir
+    return session_name, live_dir
 
 
 async def wait_for_playlist(playlist, proc, timeout=12):
@@ -255,7 +256,9 @@ async def wait_for_playlist(playlist, proc, timeout=12):
                 if isinstance(stderr, bytes):
                     stderr = stderr.decode(errors="replace")
             return False, stderr.strip() or "FFmpeg berhenti sebelum preview siap"
-        if playlist.exists() and playlist.stat().st_size > 0:
+        segment_ready = any(path.stat().st_size > 0 for path in playlist.parent.glob("seg_*.m4s"))
+        init_ready = (playlist.parent / "init.mp4").exists()
+        if playlist.exists() and playlist.stat().st_size > 0 and init_ready and segment_ready:
             return True, ""
         await asyncio.sleep(0.25)
     return False, "Timeout menunggu playlist HLS dibuat"
@@ -327,10 +330,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "message": f"UDP listener gagal: {exc}"})
                     continue
 
-            live_dir = reset_hls_live_dir()
+            session_name, live_dir = reset_hls_session_dir()
             playlist_name = "index.m3u8"
             playlist = live_dir / playlist_name
-            segment_pattern = "seg_%06d.ts"
+            segment_pattern = "seg_%06d.m4s"
             preview_cmd = [
                 "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
                 "-flags", "low_delay", "-i", input_url,
@@ -340,6 +343,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "-c:a", "aac", "-b:a", "128k",
                 "-f", "hls", "-hls_time", "1", "-hls_list_size", "8",
                 "-hls_flags", "delete_segments+omit_endlist+program_date_time+independent_segments",
+                "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
                 "-hls_segment_filename", segment_pattern, playlist_name,
             ]
             if not is_udp_input:
@@ -374,7 +378,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await stop_current()
                 await websocket.send_json({"type": "error", "message": f"Preview gagal: {preview_error}"})
                 continue
-            await websocket.send_json({"type": "ready", "url": f"/hls/live/index.m3u8?t={int(time.time())}"})
+            await websocket.send_json({"type": "ready", "url": f"/hls/{session_name}/index.m3u8?t={int(time.time())}"})
 
     except WebSocketDisconnect:
         await stop_current()
