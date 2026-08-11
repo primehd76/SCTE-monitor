@@ -12,8 +12,8 @@ App kecil untuk preview dan monitoring SCTE-35 dari stream `udp://`, `rtmp://`, 
 
 ## Cara Kerja SCTE-35
 
-- Untuk input `udp://`, parser SCTE-35 membaca multicast/UDP source langsung agar cue tidak hilang karena proses remux.
-- Untuk input non-UDP seperti `rtmp://`, `srt://`, atau `rtsp://`, backend memakai FFmpeg pipe MPEG-TS ke parser.
+- Untuk input `udp://`, backend join multicast/UDP satu kali lalu melakukan fan-out paket MPEG-TS mentah ke FFmpeg preview dan parser SCTE-35.
+- Untuk input non-UDP seperti `rtmp://`, `srt://`, atau `rtsp://`, backend memakai satu proses FFmpeg untuk HLS preview dan pipe MPEG-TS ke parser.
 - Preview video memakai FFmpeg terpisah ke HLS, jadi preview tetap jalan walau parser SCTE belum menemukan cue.
 
 ## Jalankan Dengan Docker

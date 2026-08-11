@@ -31,6 +31,7 @@ class UDPReader:
     """Read MPEG-TS packets directly from a UDP or multicast source."""
 
     def __init__(self, host: str, port: int):
+        self.buffer = bytearray()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.settimeout(0.5)
@@ -42,7 +43,12 @@ class UDPReader:
 
     def read(self, size):
         try:
-            return self.sock.recvfrom(size)[0]
+            while len(self.buffer) < size:
+                packet = self.sock.recvfrom(65536)[0]
+                self.buffer.extend(packet)
+            data = bytes(self.buffer[:size])
+            del self.buffer[:size]
+            return data
         except socket.timeout:
             return b""
         except OSError:
@@ -51,6 +57,43 @@ class UDPReader:
     def close(self):
         try:
             self.sock.close()
+        except OSError:
+            pass
+
+
+class UDPForwarder:
+    """Fan out one UDP/multicast source to local consumers."""
+
+    def __init__(self, host: str, port: int, destinations):
+        self.destinations = destinations
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.settimeout(0.5)
+        self.sock.bind(("", port))
+        self.forward_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if is_multicast(host):
+            group = socket.inet_aton(host)
+            interface = socket.inet_aton("0.0.0.0")
+            self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, group + interface)
+
+    def run(self, stop_event):
+        while not stop_event.is_set():
+            try:
+                packet = self.sock.recvfrom(65536)[0]
+                for destination in self.destinations:
+                    self.forward_sock.sendto(packet, destination)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        try:
+            self.forward_sock.close()
         except OSError:
             pass
 
@@ -83,6 +126,15 @@ def is_multicast(host: str):
         return 224 <= first_octet <= 239
     except (TypeError, ValueError):
         return False
+
+
+def get_free_udp_port():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+    finally:
+        sock.close()
 
 
 def validate_url(url: str):
@@ -148,19 +200,6 @@ def add_udp_options(url: str):
     return f"{url.replace('udp://@', 'udp://')}{separator}fifo_size=5000000&overrun_nonfatal=1"
 
 
-def create_scte_reader(url: str):
-    parsed = urlparse(url)
-    if parsed.scheme.lower() == "udp":
-        return UDPReader(parsed.hostname, parsed.port), None
-
-    cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
-        "-i", url, "-map", "0", "-c", "copy", "-f", "mpegts", "pipe:1",
-    ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    return PipeReader(proc.stdout), proc
-
-
 def scte_listener(stop_event, loop, websocket_client, reader):
     try:
         stream = threefive.Stream(reader)
@@ -213,6 +252,8 @@ async def wait_for_playlist(playlist, proc, timeout=12):
             stderr = ""
             if proc.stderr:
                 stderr = proc.stderr.read() or ""
+                if isinstance(stderr, bytes):
+                    stderr = stderr.decode(errors="replace")
             return False, stderr.strip() or "FFmpeg berhenti sebelum preview siap"
         if playlist.exists() and playlist.stat().st_size > 0:
             return True, ""
@@ -226,16 +267,21 @@ async def websocket_endpoint(websocket: WebSocket):
     preview_proc = None
     scte_proc = None
     listener_thread = None
+    forwarder_thread = None
+    udp_forwarder = None
     stop_event = threading.Event()
     loop = asyncio.get_running_loop()
 
     async def stop_current():
-        nonlocal preview_proc, scte_proc
+        nonlocal preview_proc, scte_proc, udp_forwarder
         stop_event.set()
+        if udp_forwarder:
+            udp_forwarder.close()
         stop_process(preview_proc)
         stop_process(scte_proc)
         preview_proc = None
         scte_proc = None
+        udp_forwarder = None
 
     try:
         while True:
@@ -261,7 +307,26 @@ async def websocket_endpoint(websocket: WebSocket):
             if info["status"] == "error":
                 continue
 
+            parsed = urlparse(url)
+            is_udp_input = parsed.scheme.lower() == "udp"
             input_url = add_udp_options(url)
+            scte_reader = None
+            if is_udp_input:
+                try:
+                    preview_port = get_free_udp_port()
+                    parser_port = get_free_udp_port()
+                    input_url = f"udp://127.0.0.1:{preview_port}?fifo_size=5000000&overrun_nonfatal=1"
+                    scte_reader = UDPReader("127.0.0.1", parser_port)
+                    udp_forwarder = UDPForwarder(
+                        parsed.hostname,
+                        parsed.port,
+                        [("127.0.0.1", preview_port), ("127.0.0.1", parser_port)],
+                    )
+                except OSError as exc:
+                    await stop_current()
+                    await websocket.send_json({"type": "error", "message": f"UDP listener gagal: {exc}"})
+                    continue
+
             live_dir = reset_hls_live_dir()
             playlist_name = "index.m3u8"
             playlist = live_dir / playlist_name
@@ -277,16 +342,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 "-hls_flags", "delete_segments+omit_endlist+program_date_time+independent_segments",
                 "-hls_segment_filename", segment_pattern, playlist_name,
             ]
+            if not is_udp_input:
+                preview_cmd.extend(["-map", "0", "-c", "copy", "-f", "mpegts", "pipe:1"])
             try:
                 preview_proc = subprocess.Popen(
                     preview_cmd,
                     cwd=str(live_dir),
                     stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE if not is_udp_input else subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
-                    text=True,
                 )
-                scte_reader, scte_proc = create_scte_reader(url)
+                if not is_udp_input:
+                    scte_reader = PipeReader(preview_proc.stdout)
             except OSError as exc:
+                if scte_reader:
+                    scte_reader.close()
                 await stop_current()
                 await websocket.send_json({"type": "error", "message": f"FFmpeg gagal dijalankan: {exc}"})
                 continue
@@ -295,7 +365,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 target=scte_listener, args=(stop_event, loop, websocket, scte_reader), daemon=True
             )
             listener_thread.start()
-            await websocket.send_json({"type": "scte_status", "status": "MONITORING"})
+            if udp_forwarder:
+                forwarder_thread = threading.Thread(target=udp_forwarder.run, args=(stop_event,), daemon=True)
+                forwarder_thread.start()
+            await websocket.send_json({"type": "scte_status", "status": "UDP DIRECT" if is_udp_input else "PIPE"})
             preview_ready, preview_error = await wait_for_playlist(playlist, preview_proc)
             if not preview_ready:
                 await stop_current()
