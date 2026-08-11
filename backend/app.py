@@ -256,9 +256,8 @@ async def wait_for_playlist(playlist, proc, timeout=12):
                 if isinstance(stderr, bytes):
                     stderr = stderr.decode(errors="replace")
             return False, stderr.strip() or "FFmpeg berhenti sebelum preview siap"
-        segment_ready = any(path.stat().st_size > 0 for path in playlist.parent.glob("seg_*.m4s"))
-        init_ready = (playlist.parent / "init.mp4").exists()
-        if playlist.exists() and playlist.stat().st_size > 0 and init_ready and segment_ready:
+        segment_ready = any(path.stat().st_size > 0 for path in playlist.parent.glob("seg_*.ts"))
+        if playlist.exists() and playlist.stat().st_size > 0 and segment_ready:
             return True, ""
         await asyncio.sleep(0.25)
     return False, "Timeout menunggu playlist HLS dibuat"
@@ -333,17 +332,18 @@ async def websocket_endpoint(websocket: WebSocket):
             session_name, live_dir = reset_hls_session_dir()
             playlist_name = "index.m3u8"
             playlist = live_dir / playlist_name
-            segment_pattern = "seg_%06d.m4s"
+            segment_pattern = "seg_%06d.ts"
             preview_cmd = [
                 "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
                 "-flags", "low_delay", "-i", input_url,
                 # Browser preview served directly by FastAPI, so it does not depend on MediaMTX.
-                "-map", "0:v:0?", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "ultrafast",
-                "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-force_key_frames", "expr:gte(t,n_forced*1)",
+                "-map", "0:v:0?", "-map", "0:a:0?", "-c:v", "libx264",
+                "-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "baseline", "-level:v", "4.0",
+                "-vf", "yadif=0:-1:0,scale='min(1280,iw)':-2,format=yuv420p",
+                "-g", "50", "-sc_threshold", "0",
                 "-c:a", "aac", "-b:a", "128k",
                 "-f", "hls", "-hls_time", "1", "-hls_list_size", "8",
-                "-hls_flags", "delete_segments+omit_endlist+program_date_time+independent_segments",
-                "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
+                "-hls_flags", "delete_segments+omit_endlist+program_date_time",
                 "-hls_segment_filename", segment_pattern, playlist_name,
             ]
             if not is_udp_input:

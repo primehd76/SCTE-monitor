@@ -74,6 +74,8 @@
       });
     }
     video.addEventListener('playing', () => setStatus('Preview aktif.'));
+    video.addEventListener('error', () => setStatus('Video error: ' + (video.error?.message || video.error?.code || 'unknown')));
+    video.addEventListener('stalled', () => setStatus('Preview stalled. Menunggu data video...'));
     function stopPlayer() { if (hls) { hls.destroy(); hls = null; } video.pause(); video.removeAttribute('src'); video.load(); video.classList.add('hidden'); $('placeholder').classList.remove('hidden'); }
     function addLog(data) {
       const info = data.info || data, out = Boolean(info.out_of_network_indicator), duration = info.break_duration ? `${(info.break_duration / 90000).toFixed(1)}s` : '-';
