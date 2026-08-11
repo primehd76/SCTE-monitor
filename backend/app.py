@@ -86,22 +86,29 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 if info["status"] == "error": continue
                 
-                # Jalur 1: Ke Web Player (Transcode video MPEG-2 ke H.264 agar browser bisa putar)
-                # Jalur 2: Ke Parser SCTE-35 (Copy mentah semua stream, termasuk data scte)
+                # Pengaman wajib untuk UDP Multicast agar tidak tersedak (Buffer overrun)
+                if "udp://" in url:
+                    if "?" in url and "fifo_size" not in url:
+                        url += "&fifo_size=5000000&overrun_nonfatal=1"
+                    elif "?" not in url:
+                        url += "?fifo_size=5000000&overrun_nonfatal=1"
+                
+                # FFmpeg Splitter Super Aman
                 cmd = [
                     "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
-                    # --- JALUR 1 (Tontonan Web) ---
+                    
+                    # Jalur 1: Transcode Video ke H.264 untuk Web, paksa audio ke AAC
                     "-map", "0:v:0", "-map", "0:a:0?",
                     "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", 
-                    "-c:a", "copy",
-                    "-f", "rtsp", "rtsp://127.0.0.1:8554/live",
+                    "-c:a", "aac",
+                    "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
                     
-                    # --- JALUR 2 (Sensor SCTE UDP) ---
-                    "-map", "0", "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
+                    # Jalur 2: Sensor SCTE-35 (Hanya copy Video & Data SCTE, abaikan EPG/Subtitle)
+                    "-map", "0:v:0", "-map", "0:d?", 
+                    "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
                 ]
                 proc = subprocess.Popen(cmd)
                 
-                # Jalankan SCTE Thread di latar belakang
                 threading.Thread(
                     target=scte_listener, 
                     args=(9999, stop_event, loop, websocket), 

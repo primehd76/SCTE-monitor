@@ -93,15 +93,36 @@
                 const hlsUrl = `http://${window.location.hostname}:8888/live/index.m3u8`;
                 video.classList.remove('hidden');
                 document.getElementById('placeholder').classList.add('hidden');
-                setTimeout(() => {
-                    if (Hls.isSupported()) {
-                        if(hls) hls.destroy();
-                        hls = new Hls();
-                        hls.loadSource(hlsUrl);
-                        hls.attachMedia(video);
-                        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
-                    }
-                }, 2000);
+                
+                // Fitur Auto-Retry: Tunggu sampai FFmpeg selesai transcoding
+                let attempts = 0;
+                const tryLoadHLS = () => {
+                    attempts++;
+                    fetch(hlsUrl, { method: 'HEAD' })
+                        .then(res => {
+                            if(res.ok) {
+                                // Jika file m3u8 sudah jadi, jalankan video!
+                                if (Hls.isSupported()) {
+                                    if(hls) hls.destroy();
+                                    hls = new Hls();
+                                    hls.loadSource(hlsUrl);
+                                    hls.attachMedia(video);
+                                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                                        video.play().catch(e => console.log("Autoplay dicegah:", e));
+                                    });
+                                }
+                            } else {
+                                // Jika masih 404, coba lagi 1 detik kemudian (Maksimal 10x coba)
+                                if(attempts < 10) setTimeout(tryLoadHLS, 1000);
+                            }
+                        })
+                        .catch(() => {
+                            if(attempts < 10) setTimeout(tryLoadHLS, 1000);
+                        });
+                };
+                
+                // Mulai pencarian HLS setelah 2 detik pertama
+                setTimeout(tryLoadHLS, 2000);
             }
             else if(msg.type === "scte_data") {
                 // Indikator SCTE berkedip hijau
