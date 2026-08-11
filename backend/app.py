@@ -84,37 +84,40 @@ async def websocket_endpoint(websocket: WebSocket):
                     proc.terminate()
                     proc = None
                 stop_event.clear()
-                
-                # Pengaman otomatis untuk UDP Multicast agar buffer aman tanpa user repot ngetik parameter
-                if url.startswith("udp://") and "localaddr" not in url:
-                    if "@" in url: url = url.replace("udp://@", "udp://")
-                    sep = "&" if "?" in url else "?"
-                    url += f"{sep}localaddr=172.16.123.49&fifo_size=5000000&overrun_nonfatal=1"
 
                 info = get_stream_info(url)
                 await websocket.send_json({"type": "info", "data": info})
                 if info["status"] == "error": continue
 
-                # --- UNIVERSAL FFMPEG ENGINE ---
-                # Apapun format/codec sumbernya (H264, H265, MPEG2, dll), 
-                # otomatis di-transcode secara instan ke H.264 + AAC agar mulus di semua Browser & MediaMTX
-                # Perintah FFmpeg Universal dengan pengaman khusus H.264 yang rusak/ompong dari UDP
-                cmd = [
-                    "ffmpeg", "-hide_banner", "-loglevel", "error", 
-                    "-fflags", "nobuffer", "-flags", "low_delay",
-                    "-i", url,
-                    
-                    # 1. Jalur Tontonan Web (Transcode ulang paksa agar header H.264-nya diregenerasi bersih oleh server)
-                    "-map", "0:v:0?", "-map", "0:a:0?",
-                    "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-                    "-vsync", "cfr",
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
-                    
-                    # 2. Jalur Parser SCTE-35
-                    "-map", "0:v:0?", "-map", "0:d?", 
-                    "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
-                ]
+                # --- PEMISAH PROTOKOL BERDASARKAN SUMBER ---
+                if url.startswith("rtmp://") or url.startswith("srt://"):
+                    # 1. KHUSUS RTMP & SRT (Karena biasanya sudah bersih, kita pakai COPY total tanpa transcode agar instan)
+                    cmd = [
+                        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
+                        "-map", "0:v:0?", "-map", "0:a:0?",
+                        "-c", "copy",
+                        "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
+                        "-map", "0:v:0?", "-map", "0:d?", 
+                        "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
+                    ]
+                else:
+                    # 2. KHUSUS UDP / MULTICAST (Pakai transcode ultrafast untuk merapikan header H264 yang sering ompong)
+                    if "localaddr" not in url:
+                        if "@" in url: url = url.replace("udp://@", "udp://")
+                        sep = "&" if "?" in url else "?"
+                        url += f"{sep}localaddr=172.16.123.49&fifo_size=5000000&overrun_nonfatal=1"
+
+                    cmd = [
+                        "ffmpeg", "-hide_banner", "-loglevel", "error", 
+                        "-fflags", "nobuffer", "-flags", "low_delay",
+                        "-i", url,
+                        "-map", "0:v:0?", "-map", "0:a:0?",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
+                        "-map", "0:v:0?", "-map", "0:d?", 
+                        "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
+                    ]
                 
                 proc = subprocess.Popen(cmd)
                 threading.Thread(target=scte_listener, args=(9999, stop_event, loop, websocket), daemon=True).start()
