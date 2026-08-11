@@ -9,7 +9,7 @@
 <body class="bg-gray-900 text-white h-screen flex flex-col p-4 gap-4 overflow-hidden">
     <!-- Top Bar -->
     <div class="flex gap-2">
-        <input id="url" type="text" value="" class="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 rounded text-sm focus:outline-none focus:border-blue-500">
+        <input id="url" type="text" value="rtmp://172.16.72.23/static/PGM" class="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 rounded text-sm focus:outline-none focus:border-blue-500 font-mono">
         <button id="play" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded font-bold text-sm transition">PLAY</button>
         <button id="stop" class="bg-red-600 hover:bg-red-500 px-6 py-2 rounded font-bold text-sm hidden transition">STOP</button>
     </div>
@@ -67,7 +67,8 @@
         let hls = null;
 
         document.getElementById('play').onclick = () => {
-            ws.send(JSON.stringify({action: "play", url: document.getElementById('url').value}));
+            const streamUrl = document.getElementById('url').value;
+            ws.send(JSON.stringify({action: "play", url: streamUrl}));
             document.getElementById('play').classList.add('hidden');
             document.getElementById('stop').classList.remove('hidden');
         };
@@ -76,7 +77,9 @@
             ws.send(JSON.stringify({action: "stop"}));
             document.getElementById('play').classList.remove('hidden');
             document.getElementById('stop').classList.add('hidden');
-            if(hls) hls.destroy();
+            if(hls) { hls.destroy(); hls = null; }
+            video.pause();
+            video.src = "";
             video.classList.add('hidden');
             document.getElementById('placeholder').classList.remove('hidden');
         };
@@ -91,41 +94,28 @@
             } 
             else if(msg.type === "ready") {
                 const hlsUrl = `http://${window.location.hostname}:8888/live/index.m3u8`;
-                video.classList.remove('hidden');
                 document.getElementById('placeholder').classList.add('hidden');
-                
-                // Fitur Auto-Retry: Tunggu sampai FFmpeg selesai transcoding
-                let attempts = 0;
-                const tryLoadHLS = () => {
-                    attempts++;
-                    fetch(hlsUrl, { method: 'HEAD' })
-                        .then(res => {
-                            if(res.ok) {
-                                // Jika file m3u8 sudah jadi, jalankan video!
-                                if (Hls.isSupported()) {
-                                    if(hls) hls.destroy();
-                                    hls = new Hls();
-                                    hls.loadSource(hlsUrl);
-                                    hls.attachMedia(video);
-                                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                                        video.play().catch(e => console.log("Autoplay dicegah:", e));
-                                    });
-                                }
-                            } else {
-                                // Jika masih 404, coba lagi 1 detik kemudian (Maksimal 10x coba)
-                                if(attempts < 10) setTimeout(tryLoadHLS, 1000);
-                            }
-                        })
-                        .catch(() => {
-                            if(attempts < 10) setTimeout(tryLoadHLS, 1000);
+                video.classList.remove('hidden');
+
+                // Beri jeda 3 detik agar MediaMTX matang, lalu muat HLS
+                setTimeout(() => {
+                    if (Hls.isSupported()) {
+                        if(hls) hls.destroy();
+                        hls = new Hls({ debug: false });
+                        hls.loadSource(hlsUrl);
+                        hls.attachMedia(video);
+                        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                            video.play().catch(err => console.log("Autoplay diblokir browser:", err));
                         });
-                };
-                
-                // Mulai pencarian HLS setelah 2 detik pertama
-                setTimeout(tryLoadHLS, 2000);
+                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        video.src = hlsUrl;
+                        video.addEventListener('loadedmetadata', () => {
+                            video.play();
+                        });
+                    }
+                }, 3000);
             }
             else if(msg.type === "scte_data") {
-                // Indikator SCTE berkedip hijau
                 const statusBadge = document.getElementById('scte-status');
                 statusBadge.innerText = "CUE DETECTED";
                 statusBadge.className = "bg-green-600 text-white text-xs px-2 py-1 rounded font-bold animate-pulse";
@@ -134,7 +124,6 @@
                     statusBadge.className = "bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded font-bold";
                 }, 2000);
 
-                // Masukkan ke tabel log
                 const data = msg.data.info || msg.data;
                 const time = new Date().toLocaleTimeString();
                 const eventId = data.splice_event_id || "N/A";
