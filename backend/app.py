@@ -123,8 +123,19 @@ async def websocket_endpoint(websocket: WebSocket):
                     "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
                 ])
                 
-                # Eksekusi!
-                proc = subprocess.Popen(cmd)
+                # Eksekusi dengan penangkap error log agar kelihatan jika ffmpeg crash
+                proc = subprocess.Popen(
+                    cmd, 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE
+                )
+                
+                # Cek instan apakah ffmpeg langsung mati dalam 1 detik pertama
+                import time
+                time.sleep(1.0)
+                if proc.poll() is not None:
+                    err_output = proc.stderr.read().decode()
+                    print(f"FFMPEG CRASH ERROR: {err_output}")
                 
                 threading.Thread(
                     target=scte_listener, 
