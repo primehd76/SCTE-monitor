@@ -86,27 +86,34 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 if info["status"] == "error": continue
                 
-                # Pengaman wajib untuk UDP Multicast agar tidak tersedak (Buffer overrun)
-                if "udp://" in url:
+                # Cek apakah ini stream UDP atau RTMP
+                is_udp = url.startswith("udp://")
+                
+                if is_udp:
+                    # --- MODE UDP (Multicast Playdeck, Transcode MPEG-2 ke H264) ---
                     if "?" in url and "fifo_size" not in url:
                         url += "&fifo_size=5000000&overrun_nonfatal=1"
                     elif "?" not in url:
                         url += "?fifo_size=5000000&overrun_nonfatal=1"
+                        
+                    cmd = [
+                        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
+                        "-map", "0:v:0", "-map", "0:a:0?",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", 
+                        "-c:a", "aac",
+                        "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
+                        "-map", "0:v:0", "-map", "0:d?", 
+                        "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
+                    ]
+                else:
+                    # --- MODE RTMP (Stream Normal, Copy Langsung Tanpa Transcode) ---
+                    cmd = [
+                        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
+                        "-c", "copy", # Copy mentah persis seperti VLC
+                        "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
+                        "-map", "0", "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
+                    ]
                 
-                # FFmpeg Splitter Super Aman
-                cmd = [
-                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
-                    
-                    # Jalur 1: Transcode Video ke H.264 untuk Web, paksa audio ke AAC
-                    "-map", "0:v:0", "-map", "0:a:0?",
-                    "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", 
-                    "-c:a", "aac",
-                    "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
-                    
-                    # Jalur 2: Sensor SCTE-35 (Hanya copy Video & Data SCTE, abaikan EPG/Subtitle)
-                    "-map", "0:v:0", "-map", "0:d?", 
-                    "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
-                ]
                 proc = subprocess.Popen(cmd)
                 
                 threading.Thread(
