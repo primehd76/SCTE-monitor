@@ -86,34 +86,44 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 if info["status"] == "error": continue
                 
-                # Cek apakah ini stream UDP atau RTMP
-                is_udp = url.startswith("udp://")
-                
-                if is_udp:
-                    # --- MODE UDP (Multicast Playdeck, Transcode MPEG-2 ke H264) ---
+                # Pengaman wajib untuk UDP Multicast agar tidak tersedak buffer
+                if url.startswith("udp://"):
                     if "?" in url and "fifo_size" not in url:
                         url += "&fifo_size=5000000&overrun_nonfatal=1"
                     elif "?" not in url:
                         url += "?fifo_size=5000000&overrun_nonfatal=1"
-                        
-                    cmd = [
-                        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
-                        "-map", "0:v:0", "-map", "0:a:0?",
-                        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", 
-                        "-c:a", "aac",
-                        "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
-                        "-map", "0:v:0", "-map", "0:d?", 
-                        "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
-                    ]
-                else:
-                    # --- MODE RTMP (Stream Normal, Copy Langsung Tanpa Transcode) ---
-                    cmd = [
-                        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
-                        "-c", "copy", # Copy mentah persis seperti VLC
-                        "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
-                        "-map", "0", "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
-                    ]
                 
+                # --- FFMPEG PINTAR (Otomatis menyesuaikan format) ---
+                vcodec = info.get("vcodec", "")
+                acodec = info.get("acodec", "")
+                
+                # 1. Jalur Output ke Web (MediaMTX)
+                cmd = [
+                    "ffmpeg", "-hide_banner", "-loglevel", "warning", "-i", url,
+                    "-map", "0:v:0?", "-map", "0:a:0?"
+                ]
+                
+                # Logika Video: Copy jika sudah H.264, Transcode jika format lawas
+                if vcodec == "H264":
+                    cmd.extend(["-c:v", "copy"])
+                else:
+                    cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency"])
+                
+                # Logika Audio: Copy jika sudah AAC, ubah ke AAC jika belum
+                if acodec == "AAC":
+                    cmd.extend(["-c:a", "copy"])
+                else:
+                    cmd.extend(["-c:a", "aac"])
+                    
+                cmd.extend(["-f", "rtsp", "rtsp://127.0.0.1:8554/live"])
+                
+                # 2. Jalur Output ke Sensor SCTE-35 (Abaikan EPG/Subtitle, HANYA ambil Video dan SCTE)
+                cmd.extend([
+                    "-map", "0:v:0?", "-map", "0:d?", 
+                    "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
+                ])
+                
+                # Eksekusi!
                 proc = subprocess.Popen(cmd)
                 
                 threading.Thread(
