@@ -85,16 +85,21 @@ async def websocket_endpoint(websocket: WebSocket):
                     proc = None
                 stop_event.clear()
                 
+                # Otomatis tambahkan localaddr dan buffer khusus UDP tanpa user perlu repot ngetik
+                if url.startswith("udp://") and "localaddr" not in url:
+                    # Jika menggunakan IP Multicast (224.x.x.x s.d 239.x.x.x)
+                    if "@" in url:
+                        url = url.replace("udp://@", "udp://")
+                    
+                    # Tambahkan parameter buffer dan localaddr otomatis
+                    sep = "&" if "?" in url else "?"
+                    url += f"{sep}localaddr=172.16.123.49&fifo_size=5000000&overrun_nonfatal=1"
+
                 info = get_stream_info(url)
                 await websocket.send_json({"type": "info", "data": info})
                 if info["status"] == "error": continue
-                
-                if url.startswith("udp://") and "?" not in url:
-                    url += "?fifo_size=5000000&overrun_nonfatal=1"
-                elif url.startswith("udp://") and "fifo_size" not in url:
-                    url += "&fifo_size=5000000&overrun_nonfatal=1"
 
-                # Perintah FFmpeg universal: aman untuk RTMP, SRT, maupun UDP Multicast
+                # FFmpeg dengan preset ultrafast agar transcode MPEG2 langsung instan tanpa jeda 404
                 cmd = [
                     "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
                     "-map", "0:v:0?", "-map", "0:a:0?",
