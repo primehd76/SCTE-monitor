@@ -28,13 +28,17 @@ async def root_redirect():
 
 
 class UDPReader:
-    """Small threefive reader which can be stopped without waiting forever."""
+    """Read MPEG-TS packets directly from a UDP or multicast source."""
 
-    def __init__(self, port: int):
+    def __init__(self, host: str, port: int):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.settimeout(0.5)
-        self.sock.bind(("127.0.0.1", port))
+        self.sock.bind(("", port))
+        if is_multicast(host):
+            group = socket.inet_aton(host)
+            interface = socket.inet_aton("0.0.0.0")
+            self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, group + interface)
 
     def read(self, size):
         try:
@@ -51,6 +55,36 @@ class UDPReader:
             pass
 
 
+class PipeReader:
+    """Expose FFmpeg stdout as a threefive-compatible reader."""
+
+    def __init__(self, pipe):
+        self.pipe = pipe
+
+    def read(self, size):
+        if not self.pipe:
+            return b""
+        try:
+            return self.pipe.read(size) or b""
+        except OSError:
+            return b""
+
+    def close(self):
+        try:
+            if self.pipe:
+                self.pipe.close()
+        except OSError:
+            pass
+
+
+def is_multicast(host: str):
+    try:
+        first_octet = int((host or "").split(".", 1)[0])
+        return 224 <= first_octet <= 239
+    except (TypeError, ValueError):
+        return False
+
+
 def validate_url(url: str):
     url = (url or "").strip()
     parsed = urlparse(url)
@@ -58,6 +92,8 @@ def validate_url(url: str):
         return None, "URL harus memakai protokol udp, rtmp, srt, rtsp, http, atau https"
     if not parsed.netloc:
         return None, "URL stream tidak lengkap"
+    if parsed.scheme.lower() == "udp" and not parsed.port:
+        return None, "URL UDP harus menyertakan port, contoh udp://239.0.0.1:5000"
     return url, None
 
 
@@ -75,6 +111,12 @@ def get_stream_info(url: str):
         streams = data.get("streams", [])
         video = next((s for s in streams if s.get("codec_type") == "video"), None)
         audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        data_streams = [s for s in streams if s.get("codec_type") == "data"]
+        has_scte = any(
+            "scte" in (s.get("codec_name") or "").lower()
+            or "scte" in (s.get("codec_tag_string") or "").lower()
+            for s in data_streams
+        )
         if not video:
             return {"status": "error", "msg": "Video tidak ditemukan pada stream"}
 
@@ -90,6 +132,8 @@ def get_stream_info(url: str):
             "format": f"{format_name.upper()} - {resolution}{scan} - {fps}fps",
             "vcodec": (video.get("codec_name") or "unknown").upper(),
             "acodec": (audio.get("codec_name") if audio else "NONE").upper(),
+            "has_scte": has_scte,
+            "data_streams": len(data_streams),
         }
     except subprocess.TimeoutExpired:
         return {"status": "error", "msg": "Timeout saat membaca stream"}
@@ -104,8 +148,20 @@ def add_udp_options(url: str):
     return f"{url.replace('udp://@', 'udp://')}{separator}fifo_size=5000000&overrun_nonfatal=1"
 
 
-def scte_listener(stop_event, loop, websocket_client, port=9999):
-    reader = UDPReader(port)
+def create_scte_reader(url: str):
+    parsed = urlparse(url)
+    if parsed.scheme.lower() == "udp":
+        return UDPReader(parsed.hostname, parsed.port), None
+
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
+        "-i", url, "-map", "0", "-c", "copy", "-f", "mpegts", "pipe:1",
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return PipeReader(proc.stdout), proc
+
+
+def scte_listener(stop_event, loop, websocket_client, reader):
     try:
         stream = threefive.Stream(reader)
 
@@ -221,12 +277,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 "-hls_flags", "delete_segments+omit_endlist+program_date_time+independent_segments",
                 "-hls_segment_filename", segment_pattern, playlist_name,
             ]
-            scte_cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
-                "-i", input_url,
-                # Preserve all MPEG-TS streams, including SCTE-35 data, for threefive.
-                "-map", "0", "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999?pkt_size=1316",
-            ]
             try:
                 preview_proc = subprocess.Popen(
                     preview_cmd,
@@ -235,15 +285,17 @@ async def websocket_endpoint(websocket: WebSocket):
                     stderr=subprocess.PIPE,
                     text=True,
                 )
-                scte_proc = subprocess.Popen(scte_cmd, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                scte_reader, scte_proc = create_scte_reader(url)
             except OSError as exc:
+                await stop_current()
                 await websocket.send_json({"type": "error", "message": f"FFmpeg gagal dijalankan: {exc}"})
                 continue
 
             listener_thread = threading.Thread(
-                target=scte_listener, args=(stop_event, loop, websocket), daemon=True
+                target=scte_listener, args=(stop_event, loop, websocket, scte_reader), daemon=True
             )
             listener_thread.start()
+            await websocket.send_json({"type": "scte_status", "status": "MONITORING"})
             preview_ready, preview_error = await wait_for_playlist(playlist, preview_proc)
             if not preview_ready:
                 await stop_current()

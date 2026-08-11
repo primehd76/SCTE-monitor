@@ -10,6 +10,12 @@ App kecil untuk preview dan monitoring SCTE-35 dari stream `udp://`, `rtmp://`, 
 - Status SCTE-35 dan tabel log cue.
 - Payload SCTE-35 bisa dibuka sebagai JSON di kolom log.
 
+## Cara Kerja SCTE-35
+
+- Untuk input `udp://`, parser SCTE-35 membaca multicast/UDP source langsung agar cue tidak hilang karena proses remux.
+- Untuk input non-UDP seperti `rtmp://`, `srt://`, atau `rtsp://`, backend memakai FFmpeg pipe MPEG-TS ke parser.
+- Preview video memakai FFmpeg terpisah ke HLS, jadi preview tetap jalan walau parser SCTE belum menemukan cue.
+
 ## Jalankan Dengan Docker
 
 ```powershell
