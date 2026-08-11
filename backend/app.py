@@ -24,9 +24,16 @@ class UDPReader:
         return self.sock.recvfrom(size)[0]
 
 def get_stream_info(url):
-    cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", url]
+    # Tambahkan parameter analyzeduration dan probesize agar ffprobe tidak hang di UDP
+    cmd = [
+        "ffprobe", "-v", "quiet", "-print_format", "json", 
+        "-show_streams", "-show_format", 
+        "-analyzeduration", "2000000", "-probesize", "2000000", 
+        url
+    ]
     try:
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+        # Perbesar timeout menjadi 12 detik khusus untuk Multicast
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=12)
         data = json.loads(res.stdout)
         
         video = next((s for s in data.get('streams', []) if s.get('codec_type') == 'video'), None)
@@ -36,8 +43,8 @@ def get_stream_info(url):
         
         return {
             "status": "ok",
-            "format": f"{video.get('height', '')}p{video.get('r_frame_rate', '25/1').split('/')[0]}",
-            "vcodec": video.get('codec_name', '').upper(),
+            "format": f"{video.get('height', 'unknown')}p{video.get('r_frame_rate', '25/1').split('/')[0]}",
+            "vcodec": video.get('codec_name', 'unknown').upper(),
             "acodec": audio.get('codec_name', 'NONE').upper() if audio else "NONE"
         }
     except Exception as e:
