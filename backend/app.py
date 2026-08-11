@@ -14,7 +14,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-APP_VERSION = "preview-mjpeg-2026-08-11"
+APP_VERSION = "preview-webrtc-2026-08-11"
 CURRENT_PREVIEW_PROC = None
 PREVIEW_LOCK = threading.Lock()
 
@@ -166,6 +166,17 @@ def get_free_udp_port():
         sock.close()
 
 
+def wait_for_tcp_port(host: str, port: int, timeout: float = 10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.25)
+    return False
+
+
 def validate_url(url: str):
     url = (url or "").strip()
     parsed = urlparse(url)
@@ -200,6 +211,9 @@ def get_stream_info(url: str):
         )
         if not video:
             return {"status": "error", "msg": "Video tidak ditemukan pada stream"}
+        tags = {**(data.get("format", {}).get("tags") or {}), **(video.get("tags") or {})}
+        timecode = tags.get("timecode") or tags.get("TIMEcode") or tags.get("TIMECODE")
+        start_time = data.get("format", {}).get("start_time") or video.get("start_time")
 
         height = video.get("height")
         width = video.get("width")
@@ -213,8 +227,11 @@ def get_stream_info(url: str):
             "format": f"{format_name.upper()} - {resolution}{scan} - {fps}fps",
             "vcodec": (video.get("codec_name") or "unknown").upper(),
             "acodec": (audio.get("codec_name") if audio else "NONE").upper(),
+            "has_audio": bool(audio),
             "has_scte": has_scte,
             "data_streams": len(data_streams),
+            "timecode": timecode or "-",
+            "start_time": start_time or "-",
         }
     except subprocess.TimeoutExpired:
         return {"status": "error", "msg": "Timeout saat membaca stream"}
@@ -356,6 +373,9 @@ async def websocket_endpoint(websocket: WebSocket):
             is_udp_input = parsed.scheme.lower() == "udp"
             input_url = add_udp_options(url)
             scte_reader = None
+            if not wait_for_tcp_port("127.0.0.1", 8554, timeout=10):
+                await websocket.send_json({"type": "error", "message": "MediaMTX belum siap di port 8554"})
+                continue
             if is_udp_input:
                 try:
                     preview_port = get_free_udp_port()
@@ -375,19 +395,21 @@ async def websocket_endpoint(websocket: WebSocket):
             preview_cmd = [
                 "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
                 "-flags", "low_delay", "-i", input_url,
-                "-map", "0:v:0", "-an",
-                "-vf", "yadif=0:-1:0,scale='min(960,iw)':-2,fps=12",
-                "-q:v", "5", "-f", "mpjpeg", "-boundary_tag", "ffmpeg", "pipe:1",
+                "-map", "0:v:0", "-map", "0:a:0?",
+                "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+                "-profile:v", "baseline", "-level:v", "4.0", "-pix_fmt", "yuv420p",
+                "-vf", "yadif=0:-1:0,scale='min(1280,iw)':-2,format=yuv420p",
+                "-g", "50", "-sc_threshold", "0",
+                "-c:a", "libopus", "-ar", "48000", "-ac", "2", "-b:a", "96k",
+                "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
             ]
             try:
                 preview_proc = subprocess.Popen(
                     preview_cmd,
                     stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
-                with PREVIEW_LOCK:
-                    CURRENT_PREVIEW_PROC = preview_proc
                 if not is_udp_input:
                     scte_reader, scte_proc = create_pipe_scte_reader(url)
             except OSError as exc:
@@ -404,7 +426,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if udp_forwarder:
                 forwarder_thread = threading.Thread(target=udp_forwarder.run, args=(stop_event,), daemon=True)
                 forwarder_thread.start()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
             if preview_proc.poll() is not None:
                 stderr = preview_proc.stderr.read() if preview_proc.stderr else b""
                 if isinstance(stderr, bytes):
@@ -413,7 +435,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "error", "message": f"Preview gagal: {stderr.strip() or 'FFmpeg berhenti'}"})
                 continue
             await websocket.send_json({"type": "scte_status", "status": "UDP DIRECT" if is_udp_input else "PIPE"})
-            await websocket.send_json({"type": "ready", "url": f"/preview.mjpg?t={int(time.time())}", "engine": "mjpeg"})
+            await websocket.send_json({"type": "ready", "url": "/live", "engine": "webrtc"})
 
     except WebSocketDisconnect:
         await stop_current()
