@@ -4,8 +4,8 @@ import shutil
 import socket
 import subprocess
 import threading
-import time
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -167,16 +167,19 @@ async def wait_for_playlist(playlist, proc, timeout=12):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    proc = None
+    preview_proc = None
+    scte_proc = None
     listener_thread = None
     stop_event = threading.Event()
     loop = asyncio.get_running_loop()
 
     async def stop_current():
-        nonlocal proc
+        nonlocal preview_proc, scte_proc
         stop_event.set()
-        stop_process(proc)
-        proc = None
+        stop_process(preview_proc)
+        stop_process(scte_proc)
+        preview_proc = None
+        scte_proc = None
 
     try:
         while True:
@@ -204,9 +207,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
             input_url = add_udp_options(url)
             live_dir = reset_hls_live_dir()
-            playlist = live_dir / "index.m3u8"
-            segment_pattern = live_dir / "seg_%06d.ts"
-            cmd = [
+            playlist_name = "index.m3u8"
+            playlist = live_dir / playlist_name
+            segment_pattern = "seg_%06d.ts"
+            preview_cmd = [
                 "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
                 "-flags", "low_delay", "-i", input_url,
                 # Browser preview served directly by FastAPI, so it does not depend on MediaMTX.
@@ -215,12 +219,23 @@ async def websocket_endpoint(websocket: WebSocket):
                 "-c:a", "aac", "-b:a", "128k",
                 "-f", "hls", "-hls_time", "1", "-hls_list_size", "8",
                 "-hls_flags", "delete_segments+omit_endlist+program_date_time+independent_segments",
-                "-hls_segment_filename", str(segment_pattern), str(playlist),
+                "-hls_segment_filename", segment_pattern, playlist_name,
+            ]
+            scte_cmd = [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
+                "-i", input_url,
                 # Preserve all MPEG-TS streams, including SCTE-35 data, for threefive.
                 "-map", "0", "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999?pkt_size=1316",
             ]
             try:
-                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                preview_proc = subprocess.Popen(
+                    preview_cmd,
+                    cwd=str(live_dir),
+                    stdin=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                scte_proc = subprocess.Popen(scte_cmd, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except OSError as exc:
                 await websocket.send_json({"type": "error", "message": f"FFmpeg gagal dijalankan: {exc}"})
                 continue
@@ -229,7 +244,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 target=scte_listener, args=(stop_event, loop, websocket), daemon=True
             )
             listener_thread.start()
-            preview_ready, preview_error = await wait_for_playlist(playlist, proc)
+            preview_ready, preview_error = await wait_for_playlist(playlist, preview_proc)
             if not preview_ready:
                 await stop_current()
                 await websocket.send_json({"type": "error", "message": f"Preview gagal: {preview_error}"})

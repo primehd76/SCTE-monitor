@@ -4,7 +4,7 @@
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SCTE-35 Master Monitor</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="/ui/vendor/hls.min.js"></script>
 </head>
 <body class="bg-gray-950 text-white min-h-screen flex flex-col p-4 gap-4">
   <header><h1 class="text-xl font-bold">SCTE-35 Master Monitor</h1><p id="status" class="text-xs text-gray-500 mt-1">Masukkan URL stream untuk mulai monitoring.</p></header>
@@ -55,7 +55,19 @@
     function startPlayer(url) {
       $('placeholder').classList.add('hidden'); video.classList.remove('hidden');
       if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = url; video.play().catch(() => {}); return; }
-      if (window.Hls && Hls.isSupported()) { if (hls) hls.destroy(); hls = new Hls({liveSyncDurationCount: 2}); hls.loadSource(url); hls.attachMedia(video); hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {})); hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setStatus('Preview belum tersedia: ' + d.details); }); }
+      if (!window.Hls) { setStatus('Preview gagal: hls.js lokal tidak termuat.'); return; }
+      if (!Hls.isSupported()) { setStatus('Preview gagal: browser ini tidak mendukung HLS/MSE.'); return; }
+      if (hls) hls.destroy();
+      hls = new Hls({liveSyncDurationCount: 3, maxLiveSyncPlaybackRate: 1.5});
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => hls.loadSource(url));
+      hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => setStatus('Preview siap, klik play di player.')));
+      hls.on(Hls.Events.ERROR, (_, d) => {
+        if (!d.fatal) return;
+        setStatus('Preview error: ' + d.details);
+        if (d.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+      });
     }
     function stopPlayer() { if (hls) { hls.destroy(); hls = null; } video.pause(); video.removeAttribute('src'); video.load(); video.classList.add('hidden'); $('placeholder').classList.remove('hidden'); }
     function addLog(data) {

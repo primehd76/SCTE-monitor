@@ -1,14 +1,10 @@
 services:
-  mediamtx:
-    image: bluenviron/mediamtx:latest
-    container_name: sm_mediamtx
-    network_mode: "host"
-    restart: always
-
   backend:
     build: ./backend
     container_name: sm_backend
     network_mode: "host"
+    environment:
+      - PYTHONUNBUFFERED=1
     restart: always
     volumes:
       - ./frontend:/app/frontend
