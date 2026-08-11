@@ -85,7 +85,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 cmd = [
                     "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
                     "-c", "copy", 
-                    "-f", "rtsp", "rtsp://mediamtx:8554/live"
+                    "-f", "rtsp", "rtsp://127.0.0.1:8554/live"
                 ]
                 proc = subprocess.Popen(cmd)
                 
