@@ -39,8 +39,9 @@
     const setPlaying = value => { playing = value; $('play').classList.toggle('hidden', value); $('stop').classList.toggle('hidden', !value); $('play').disabled = false; };
     const setScteBadge = (text, klass = 'bg-gray-700 text-gray-300') => { $('scte-status').textContent = text; $('scte-status').className = `${klass} text-xs px-2 py-1 rounded font-bold`; };
     function connect() {
+      fetch('/version').then(r => r.json()).then(v => setStatus(`Backend ${v.version}. Masukkan URL UDP, RTMP, atau SRT.`)).catch(() => {});
       ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-      ws.onopen = () => { $('play').disabled = false; setStatus('Terhubung. Masukkan URL UDP, RTMP, atau SRT.'); };
+      ws.onopen = () => { $('play').disabled = false; };
       ws.onclose = () => { $('play').disabled = true; setStatus('Koneksi backend terputus. Refresh halaman untuk mencoba lagi.'); setPlaying(false); };
       ws.onerror = () => setStatus('Gagal terhubung ke backend.');
       ws.onmessage = ({data}) => {

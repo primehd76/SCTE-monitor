@@ -19,7 +19,9 @@ App kecil untuk preview dan monitoring SCTE-35 dari stream `udp://`, `rtmp://`, 
 ## Jalankan Dengan Docker
 
 ```powershell
-docker compose up --build
+docker compose down --remove-orphans
+docker compose build --no-cache backend
+docker compose up --force-recreate
 ```
 
 Lalu buka:
@@ -27,6 +29,14 @@ Lalu buka:
 ```text
 http://localhost:8000
 ```
+
+Cek versi backend yang sedang jalan:
+
+```text
+http://localhost:8000/version
+```
+
+Versi preview yang benar harus menampilkan `preview-ts-hls-2026-08-11`. Di log container, request preview yang benar akan berbentuk `/hls/live-.../seg_000000.ts`. Kalau masih muncul `/live-.../seg_000000.m4s`, berarti container masih menjalankan image/kode lama.
 
 Contoh input:
 

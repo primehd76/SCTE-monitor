@@ -7,4 +7,5 @@ services:
       - PYTHONUNBUFFERED=1
     restart: always
     volumes:
+      - ./backend/app.py:/app/app.py:ro
       - ./frontend:/app/frontend

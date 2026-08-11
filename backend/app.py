@@ -14,6 +14,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+APP_VERSION = "preview-ts-hls-2026-08-11"
+
 app = FastAPI()
 app.mount("/ui", StaticFiles(directory="frontend"), name="frontend")
 
@@ -25,6 +27,11 @@ app.mount("/hls", StaticFiles(directory=str(HLS_ROOT)), name="hls")
 @app.get("/")
 async def root_redirect():
     return RedirectResponse(url="/ui/index.html")
+
+
+@app.get("/version")
+async def version():
+    return {"version": APP_VERSION}
 
 
 class UDPReader:
