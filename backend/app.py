@@ -98,16 +98,20 @@ async def websocket_endpoint(websocket: WebSocket):
                 # --- UNIVERSAL FFMPEG ENGINE ---
                 # Apapun format/codec sumbernya (H264, H265, MPEG2, dll), 
                 # otomatis di-transcode secara instan ke H.264 + AAC agar mulus di semua Browser & MediaMTX
+                # Perintah FFmpeg Universal dengan pengaman khusus H.264 yang rusak/ompong dari UDP
                 cmd = [
-                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", 
+                    "-fflags", "nobuffer", "-flags", "low_delay",
+                    "-i", url,
                     
-                    # 1. Jalur Tontonan Web (Universal Transcode ke H.264 & AAC)
+                    # 1. Jalur Tontonan Web (Transcode ulang paksa agar header H.264-nya diregenerasi bersih oleh server)
                     "-map", "0:v:0?", "-map", "0:a:0?",
                     "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+                    "-vsync", "cfr",
                     "-c:a", "aac", "-b:a", "128k",
                     "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
                     
-                    # 2. Jalur Parser SCTE-35 (Copy mentah khusus data cue)
+                    # 2. Jalur Parser SCTE-35
                     "-map", "0:v:0?", "-map", "0:d?", 
                     "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
                 ]
