@@ -19,9 +19,44 @@ app.mount("/ui", StaticFiles(directory="frontend"), name="frontend")
 class UDPReader:
     def __init__(self, port):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(("127.0.0.1", port))
+        # Tambahkan SO_REUSEADDR agar port langsung bisa dipakai ulang jikaCrash/Restart
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            self.sock.bind(("127.0.0.1", port))
+        except Exception:
+            pass
     def read(self, size):
-        return self.sock.recvfrom(size)[0]
+        try:
+            return self.sock.recvfrom(size)[0]
+        except Exception:
+            return b""
+    def close(self):
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+def scte_listener(port: int, stop_event: threading.Event, loop, websocket_client):
+    reader = UDPReader(port)
+    st = threefive.Stream(reader)
+    
+    def on_scte(cue):
+        if stop_event.is_set(): return
+        try:
+            data_json = json.loads(cue.get_json())
+            asyncio.run_coroutine_threadsafe(
+                websocket_client.send_json({"type": "scte_data", "data": data_json}), loop
+            )
+        except Exception:
+            pass
+        
+    try:
+        while not stop_event.is_set():
+            st.decode(func=on_scte)
+    except Exception:
+        pass
+    finally:
+        reader.close()
 
 def get_stream_info(url):
     # Tambahkan parameter analyzeduration dan probesize agar ffprobe tidak hang di UDP
@@ -49,23 +84,6 @@ def get_stream_info(url):
         }
     except Exception as e:
         return {"status": "error", "msg": str(e)}
-
-def scte_listener(port: int, stop_event: threading.Event, loop, websocket_client):
-    reader = UDPReader(port)
-    st = threefive.Stream(reader)
-    
-    def on_scte(cue):
-        if stop_event.is_set(): return
-        data_json = json.loads(cue.get_json())
-        asyncio.run_coroutine_threadsafe(
-            websocket_client.send_json({"type": "scte_data", "data": data_json}), loop
-        )
-        
-    try:
-        while not stop_event.is_set():
-            st.decode(func=on_scte)
-    except Exception:
-        pass
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
