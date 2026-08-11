@@ -1,118 +1,73 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="id">
 <head>
-    <meta charset="UTF-8">
-    <title>SCTE-35 Master Monitor</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SCTE-35 Master Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
-<body class="bg-gray-900 text-white h-screen flex flex-col p-4 gap-4 overflow-hidden">
-    <div class="flex gap-2">
-        <input id="url" type="text" value="" class="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 rounded text-sm font-mono">
-        <button id="play" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded font-bold text-sm">PLAY</button>
-        <button id="stop" class="bg-red-600 hover:bg-red-500 px-6 py-2 rounded font-bold text-sm hidden">STOP</button>
-    </div>
-
-    <div class="flex-1 flex gap-4 overflow-hidden">
-        <div class="w-7/12 bg-black rounded border border-gray-800 flex items-center justify-center relative overflow-hidden">
-            <span id="placeholder" class="text-gray-600 font-bold tracking-widest">NO SIGNAL</span>
-            <video id="video" controls autoplay muted class="absolute inset-0 w-full h-full hidden object-contain"></video>
-        </div>
-        <div class="w-5/12 flex flex-col gap-4">
-            <div class="bg-gray-800 border border-gray-700 p-4 rounded flex flex-col gap-2 text-sm">
-                <h2 class="font-bold border-b border-gray-700 pb-2 text-gray-400">STREAM INFO</h2>
-                <div class="flex justify-between"><span>Format:</span> <span id="f-fmt" class="text-blue-400 font-bold">-</span></div>
-                <div class="flex justify-between"><span>Video Codec:</span> <span id="f-vcodec" class="text-green-400 font-bold">-</span></div>
-                <div class="flex justify-between"><span>Audio Codec:</span> <span id="f-acodec" class="text-yellow-400 font-bold">-</span></div>
-                <div class="flex justify-between items-center pt-2 border-t border-gray-700">
-                    <span>SCTE-35 Status:</span> 
-                    <span id="scte-status" class="bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded font-bold">WAITING</span>
-                </div>
-            </div>
-            <div class="flex-1 bg-gray-800 border border-gray-700 rounded flex flex-col overflow-hidden">
-                <div class="bg-gray-900 p-3 border-b border-gray-700 flex justify-between items-center text-xs">
-                    <span class="font-bold text-gray-400">SCTE-35 EVENT LOGS</span>
-                    <button onclick="document.getElementById('log-body').innerHTML=''" class="bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">Clear</button>
-                </div>
-                <div class="flex-1 overflow-y-auto">
-                    <table class="w-full text-left text-xs">
-                        <thead class="bg-gray-900/50 text-gray-400 sticky top-0">
-                            <tr><th class="p-2">Time</th><th class="p-2">Event ID</th><th class="p-2">Type</th><th class="p-2">Duration</th></tr>
-                        </thead>
-                        <tbody id="log-body" class="divide-y divide-gray-700"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        const ws = new WebSocket(`ws://${window.location.host}/ws`);
-        const video = document.getElementById('video');
-        let hls = null;
-
-        document.getElementById('play').onclick = () => {
-            ws.send(JSON.stringify({action: "play", url: document.getElementById('url').value}));
-            document.getElementById('play').classList.add('hidden');
-            document.getElementById('stop').classList.remove('hidden');
-        };
-
-        document.getElementById('stop').onclick = () => {
-            ws.send(JSON.stringify({action: "stop"}));
-            document.getElementById('play').classList.remove('hidden');
-            document.getElementById('stop').classList.add('hidden');
-            if(hls) { hls.destroy(); hls = null; }
-            video.pause(); video.src = "";
-            video.classList.add('hidden');
-            document.getElementById('placeholder').classList.remove('hidden');
-        };
-
-        ws.onmessage = (e) => {
-            const msg = JSON.parse(e.data);
-            if(msg.type === "info" && msg.data.status === "ok") {
-                document.getElementById('f-fmt').innerText = msg.data.format;
-                document.getElementById('f-vcodec').innerText = msg.data.vcodec;
-                document.getElementById('f-acodec').innerText = msg.data.acodec;
-            } 
-            else if(msg.type === "ready") {
-                const hlsUrl = `http://${window.location.hostname}:8888/live/index.m3u8`;
-                document.getElementById('placeholder').classList.add('hidden');
-                video.classList.remove('hidden');
-
-                setTimeout(() => {
-                    if (Hls.isSupported()) {
-                        if(hls) hls.destroy();
-                        hls = new Hls();
-                        hls.loadSource(hlsUrl);
-                        hls.attachMedia(video);
-                        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(e => {}));
-                    }
-                }, 3000);
-            }
-            else if(msg.type === "scte_data") {
-                const statusBadge = document.getElementById('scte-status');
-                statusBadge.innerText = "CUE DETECTED";
-                statusBadge.className = "bg-green-600 text-white text-xs px-2 py-1 rounded font-bold animate-pulse";
-                setTimeout(() => {
-                    statusBadge.innerText = "WAITING";
-                    statusBadge.className = "bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded font-bold";
-                }, 2000);
-
-                const data = msg.data.info || msg.data;
-                const time = new Date().toLocaleTimeString();
-                const eventId = data.splice_event_id || "N/A";
-                const type = data.out_of_network_indicator ? "START (OUT)" : "END (IN)";
-                const duration = data.break_duration ? (data.break_duration / 90000).toFixed(1) + "s" : "-";
-
-                const row = `<tr class="hover:bg-gray-700/50">
-                    <td class="p-2 text-gray-400">${time}</td>
-                    <td class="p-2 font-mono text-blue-400">${eventId}</td>
-                    <td class="p-2 font-bold ${data.out_of_network_indicator ? 'text-red-400' : 'text-green-400'}">${type}</td>
-                    <td class="p-2">${duration}</td>
-                </tr>`;
-                document.getElementById('log-body').insertAdjacentHTML('afterbegin', row);
-            }
-        };
-    </script>
+<body class="bg-gray-950 text-white min-h-screen flex flex-col p-4 gap-4">
+  <header><h1 class="text-xl font-bold">SCTE-35 Master Monitor</h1><p id="status" class="text-xs text-gray-500 mt-1">Masukkan URL stream untuk mulai monitoring.</p></header>
+  <section class="flex gap-2">
+    <input id="url" type="url" autocomplete="off" placeholder="udp://239.1.1.1:5000 · srt://host:9000 · rtmp://..." class="flex-1 min-w-0 bg-gray-900 border border-gray-700 px-3 py-2 rounded text-sm font-mono focus:outline-none focus:border-blue-500">
+    <button id="play" class="bg-green-600 hover:bg-green-500 disabled:opacity-50 px-6 py-2 rounded font-bold text-sm">PLAY</button>
+    <button id="stop" class="bg-red-600 hover:bg-red-500 px-6 py-2 rounded font-bold text-sm hidden">STOP</button>
+  </section>
+  <main class="flex-1 grid lg:grid-cols-12 gap-4 min-h-0">
+    <section class="lg:col-span-7 bg-black rounded border border-gray-800 flex items-center justify-center relative min-h-[320px] overflow-hidden">
+      <span id="placeholder" class="text-gray-600 font-bold tracking-widest">NO SIGNAL</span>
+      <video id="video" controls autoplay muted playsinline class="absolute inset-0 w-full h-full hidden object-contain"></video>
+    </section>
+    <section class="lg:col-span-5 flex flex-col gap-4 min-h-0">
+      <div class="bg-gray-900 border border-gray-800 p-4 rounded text-sm space-y-2">
+        <h2 class="font-bold border-b border-gray-800 pb-2 text-gray-400">STREAM INFO</h2>
+        <div class="flex justify-between gap-4"><span>Format:</span><span id="f-fmt" class="text-blue-400 font-bold text-right">-</span></div>
+        <div class="flex justify-between"><span>Video Codec:</span><span id="f-vcodec" class="text-green-400 font-bold">-</span></div>
+        <div class="flex justify-between"><span>Audio Codec:</span><span id="f-acodec" class="text-yellow-400 font-bold">-</span></div>
+        <div class="flex justify-between items-center pt-2 border-t border-gray-800"><span>SCTE-35:</span><span id="scte-status" class="bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded font-bold">WAITING</span></div>
+      </div>
+      <div class="flex-1 min-h-[260px] bg-gray-900 border border-gray-800 rounded flex flex-col overflow-hidden">
+        <div class="bg-gray-950 p-3 border-b border-gray-800 flex justify-between items-center text-xs"><span class="font-bold text-gray-400">SCTE-35 EVENT LOGS</span><button id="clear" class="bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">Clear</button></div>
+        <div class="flex-1 overflow-auto"><table class="w-full text-left text-xs"><thead class="bg-gray-950 text-gray-400 sticky top-0"><tr><th class="p-2">Time</th><th class="p-2">Event ID</th><th class="p-2">Type</th><th class="p-2">Duration</th><th class="p-2">Payload</th></tr></thead><tbody id="log-body" class="divide-y divide-gray-800"></tbody></table></div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const $ = id => document.getElementById(id), video = $('video');
+    let ws, hls, playing = false;
+    const setStatus = text => $('status').textContent = text;
+    const setPlaying = value => { playing = value; $('play').classList.toggle('hidden', value); $('stop').classList.toggle('hidden', !value); $('play').disabled = false; };
+    function connect() {
+      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+      ws.onopen = () => { $('play').disabled = false; setStatus('Terhubung. Masukkan URL UDP, RTMP, atau SRT.'); };
+      ws.onclose = () => { $('play').disabled = true; setStatus('Koneksi backend terputus. Refresh halaman untuk mencoba lagi.'); setPlaying(false); };
+      ws.onerror = () => setStatus('Gagal terhubung ke backend.');
+      ws.onmessage = ({data}) => {
+        const msg = JSON.parse(data);
+        if (msg.type === 'status') setStatus(msg.message);
+        if (msg.type === 'error') { setStatus(msg.message); setPlaying(false); }
+        if (msg.type === 'info') { if (msg.data.status === 'ok') { $('f-fmt').textContent = msg.data.format; $('f-vcodec').textContent = msg.data.vcodec; $('f-acodec').textContent = msg.data.acodec; } else { setStatus(msg.data.msg); setPlaying(false); } }
+        if (msg.type === 'ready') { setStatus('Stream aktif. Menunggu preview...'); startPlayer(`${location.protocol === 'https:' ? 'https' : 'http'}://${location.hostname}:8888${msg.url}`); }
+        if (msg.type === 'stopped') { stopPlayer(); setStatus('Monitoring dihentikan.'); setPlaying(false); }
+        if (msg.type === 'scte_data') addLog(msg.data);
+      };
+    }
+    function startPlayer(url) {
+      $('placeholder').classList.add('hidden'); video.classList.remove('hidden');
+      if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = url; video.play().catch(() => {}); return; }
+      if (window.Hls && Hls.isSupported()) { if (hls) hls.destroy(); hls = new Hls({liveSyncDurationCount: 2}); hls.loadSource(url); hls.attachMedia(video); hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {})); hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setStatus('Preview belum tersedia: ' + d.details); }); }
+    }
+    function stopPlayer() { if (hls) { hls.destroy(); hls = null; } video.pause(); video.removeAttribute('src'); video.load(); video.classList.add('hidden'); $('placeholder').classList.remove('hidden'); }
+    function addLog(data) {
+      const info = data.info || data, out = Boolean(info.out_of_network_indicator), duration = info.break_duration ? `${(info.break_duration / 90000).toFixed(1)}s` : '-';
+      const tr = document.createElement('tr'); tr.className = 'hover:bg-gray-800';
+      [new Date().toLocaleTimeString(), info.splice_event_id ?? 'N/A', out ? 'START (OUT)' : 'END (IN)', duration].forEach((v, i) => { const td = document.createElement('td'); td.className = 'p-2 ' + (i === 1 ? 'font-mono text-blue-400' : ''); td.textContent = v; tr.appendChild(td); });
+      const payload = document.createElement('td'); payload.className = 'p-2'; const details = document.createElement('details'); const summary = document.createElement('summary'); summary.className = 'cursor-pointer text-blue-400'; summary.textContent = 'lihat JSON'; const pre = document.createElement('pre'); pre.className = 'mt-2 whitespace-pre-wrap text-[10px] text-gray-300 max-w-xs'; pre.textContent = JSON.stringify(data, null, 2); details.append(summary, pre); payload.appendChild(details); tr.appendChild(payload); $('log-body').prepend(tr);
+      $('scte-status').textContent = 'CUE DETECTED'; $('scte-status').className = 'bg-green-600 text-white text-xs px-2 py-1 rounded font-bold'; setTimeout(() => { $('scte-status').textContent = 'MONITORING'; $('scte-status').className = 'bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded font-bold'; }, 2500);
+    }
+    $('play').onclick = () => { const url = $('url').value.trim(); if (!url || !ws || ws.readyState !== WebSocket.OPEN) return setStatus('Isi URL dan pastikan backend terhubung.'); ws.send(JSON.stringify({action:'play', url})); setPlaying(true); setStatus('Menyiapkan stream...'); };
+    $('stop').onclick = () => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({action:'stop'}));
+    $('clear').onclick = () => $('log-body').replaceChildren(); $('url').addEventListener('keydown', e => { if (e.key === 'Enter') $('play').click(); }); connect();
+  </script>
 </body>
 </html>
