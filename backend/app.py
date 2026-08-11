@@ -85,13 +85,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     proc = None
                 stop_event.clear()
                 
-                # Otomatis tambahkan localaddr dan buffer khusus UDP tanpa user perlu repot ngetik
+                # Pengaman otomatis untuk UDP Multicast agar buffer aman tanpa user repot ngetik parameter
                 if url.startswith("udp://") and "localaddr" not in url:
-                    # Jika menggunakan IP Multicast (224.x.x.x s.d 239.x.x.x)
-                    if "@" in url:
-                        url = url.replace("udp://@", "udp://")
-                    
-                    # Tambahkan parameter buffer dan localaddr otomatis
+                    if "@" in url: url = url.replace("udp://@", "udp://")
                     sep = "&" if "?" in url else "?"
                     url += f"{sep}localaddr=172.16.123.49&fifo_size=5000000&overrun_nonfatal=1"
 
@@ -99,13 +95,19 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "info", "data": info})
                 if info["status"] == "error": continue
 
-                # FFmpeg dengan preset ultrafast agar transcode MPEG2 langsung instan tanpa jeda 404
+                # --- UNIVERSAL FFMPEG ENGINE ---
+                # Apapun format/codec sumbernya (H264, H265, MPEG2, dll), 
+                # otomatis di-transcode secara instan ke H.264 + AAC agar mulus di semua Browser & MediaMTX
                 cmd = [
                     "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
+                    
+                    # 1. Jalur Tontonan Web (Universal Transcode ke H.264 & AAC)
                     "-map", "0:v:0?", "-map", "0:a:0?",
                     "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-                    "-c:a", "aac",
+                    "-c:a", "aac", "-b:a", "128k",
                     "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
+                    
+                    # 2. Jalur Parser SCTE-35 (Copy mentah khusus data cue)
                     "-map", "0:v:0?", "-map", "0:d?", 
                     "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
                 ]
