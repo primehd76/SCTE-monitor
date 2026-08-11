@@ -79,13 +79,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 if info["status"] == "error": continue
                 
-                # FFmpeg Splitter: Jalur 1 ke MediaMTX (Web), Jalur 2 ke UDP Local untuk SCTE Parser
-                # Perintah FFmpeg yang digabung langsung (Muxing) agar HLS MediaMTX tidak pecah track
-                # Mode Pure Copy: Tanpa transcode sama sekali, persis seperti VLC
+                # Jalur 1: Ke Web Player (Transcode video MPEG-2 ke H.264 agar browser bisa putar)
+                # Jalur 2: Ke Parser SCTE-35 (Copy mentah semua stream, termasuk data scte)
                 cmd = [
                     "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
-                    "-c", "copy", 
-                    "-f", "rtsp", "rtsp://127.0.0.1:8554/live"
+                    # --- JALUR 1 (Tontonan Web) ---
+                    "-map", "0:v:0", "-map", "0:a:0?",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", 
+                    "-c:a", "copy",
+                    "-f", "rtsp", "rtsp://127.0.0.1:8554/live",
+                    
+                    # --- JALUR 2 (Sensor SCTE UDP) ---
+                    "-map", "0", "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
                 ]
                 proc = subprocess.Popen(cmd)
                 
