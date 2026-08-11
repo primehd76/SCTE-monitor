@@ -1,8 +1,12 @@
 import asyncio
 import json
+import shutil
 import socket
 import subprocess
 import threading
+import time
+import tempfile
+from pathlib import Path
 from urllib.parse import urlparse
 
 import threefive
@@ -12,6 +16,10 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 app.mount("/ui", StaticFiles(directory="frontend"), name="frontend")
+
+HLS_ROOT = Path(tempfile.gettempdir()) / "scte-monitor-hls"
+HLS_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/hls", StaticFiles(directory=str(HLS_ROOT)), name="hls")
 
 
 @app.get("/")
@@ -79,7 +87,7 @@ def get_stream_info(url: str):
         format_name = data.get("format", {}).get("format_name", "unknown")
         return {
             "status": "ok",
-            "format": f"{format_name.upper()} · {resolution}{scan} · {fps}fps",
+            "format": f"{format_name.upper()} - {resolution}{scan} - {fps}fps",
             "vcodec": (video.get("codec_name") or "unknown").upper(),
             "acodec": (audio.get("codec_name") if audio else "NONE").upper(),
         }
@@ -130,6 +138,32 @@ def stop_process(proc):
             proc.kill()
 
 
+def reset_hls_live_dir():
+    live_dir = HLS_ROOT / "live"
+    resolved_root = HLS_ROOT.resolve()
+    if live_dir.exists():
+        resolved_live = live_dir.resolve()
+        if resolved_root not in resolved_live.parents:
+            raise RuntimeError("Path HLS tidak aman untuk dibersihkan")
+        shutil.rmtree(live_dir)
+    live_dir.mkdir(parents=True, exist_ok=True)
+    return live_dir
+
+
+async def wait_for_playlist(playlist, proc, timeout=12):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            stderr = ""
+            if proc.stderr:
+                stderr = proc.stderr.read() or ""
+            return False, stderr.strip() or "FFmpeg berhenti sebelum preview siap"
+        if playlist.exists() and playlist.stat().st_size > 0:
+            return True, ""
+        await asyncio.sleep(0.25)
+    return False, "Timeout menunggu playlist HLS dibuat"
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -169,18 +203,24 @@ async def websocket_endpoint(websocket: WebSocket):
                 continue
 
             input_url = add_udp_options(url)
+            live_dir = reset_hls_live_dir()
+            playlist = live_dir / "index.m3u8"
+            segment_pattern = live_dir / "seg_%06d.ts"
             cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", "warning", "-fflags", "nobuffer",
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
                 "-flags", "low_delay", "-i", input_url,
-                # Stable browser preview through MediaMTX.
+                # Browser preview served directly by FastAPI, so it does not depend on MediaMTX.
                 "-map", "0:v:0?", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "ultrafast",
-                "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-                "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
+                "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-force_key_frames", "expr:gte(t,n_forced*1)",
+                "-c:a", "aac", "-b:a", "128k",
+                "-f", "hls", "-hls_time", "1", "-hls_list_size", "8",
+                "-hls_flags", "delete_segments+omit_endlist+program_date_time+independent_segments",
+                "-hls_segment_filename", str(segment_pattern), str(playlist),
                 # Preserve all MPEG-TS streams, including SCTE-35 data, for threefive.
                 "-map", "0", "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999?pkt_size=1316",
             ]
             try:
-                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
+                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             except OSError as exc:
                 await websocket.send_json({"type": "error", "message": f"FFmpeg gagal dijalankan: {exc}"})
                 continue
@@ -189,7 +229,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 target=scte_listener, args=(stop_event, loop, websocket), daemon=True
             )
             listener_thread.start()
-            await websocket.send_json({"type": "ready", "url": "/live/index.m3u8"})
+            preview_ready, preview_error = await wait_for_playlist(playlist, proc)
+            if not preview_ready:
+                await stop_current()
+                await websocket.send_json({"type": "error", "message": f"Preview gagal: {preview_error}"})
+                continue
+            await websocket.send_json({"type": "ready", "url": f"/hls/live/index.m3u8?t={int(time.time())}"})
 
     except WebSocketDisconnect:
         await stop_current()

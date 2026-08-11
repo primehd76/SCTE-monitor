@@ -9,7 +9,7 @@
 <body class="bg-gray-950 text-white min-h-screen flex flex-col p-4 gap-4">
   <header><h1 class="text-xl font-bold">SCTE-35 Master Monitor</h1><p id="status" class="text-xs text-gray-500 mt-1">Masukkan URL stream untuk mulai monitoring.</p></header>
   <section class="flex gap-2">
-    <input id="url" type="url" autocomplete="off" placeholder="udp://239.1.1.1:5000 · srt://host:9000 · rtmp://..." class="flex-1 min-w-0 bg-gray-900 border border-gray-700 px-3 py-2 rounded text-sm font-mono focus:outline-none focus:border-blue-500">
+    <input id="url" type="url" autocomplete="off" placeholder="udp://239.1.1.1:5000 - srt://host:9000 - rtmp://..." class="flex-1 min-w-0 bg-gray-900 border border-gray-700 px-3 py-2 rounded text-sm font-mono focus:outline-none focus:border-blue-500">
     <button id="play" class="bg-green-600 hover:bg-green-500 disabled:opacity-50 px-6 py-2 rounded font-bold text-sm">PLAY</button>
     <button id="stop" class="bg-red-600 hover:bg-red-500 px-6 py-2 rounded font-bold text-sm hidden">STOP</button>
   </section>
@@ -47,7 +47,7 @@
         if (msg.type === 'status') setStatus(msg.message);
         if (msg.type === 'error') { setStatus(msg.message); setPlaying(false); }
         if (msg.type === 'info') { if (msg.data.status === 'ok') { $('f-fmt').textContent = msg.data.format; $('f-vcodec').textContent = msg.data.vcodec; $('f-acodec').textContent = msg.data.acodec; } else { setStatus(msg.data.msg); setPlaying(false); } }
-        if (msg.type === 'ready') { setStatus('Stream aktif. Menunggu preview...'); startPlayer(`${location.protocol === 'https:' ? 'https' : 'http'}://${location.hostname}:8888${msg.url}`); }
+        if (msg.type === 'ready') { setStatus('Stream aktif. Menunggu preview...'); startPlayer(new URL(msg.url, location.origin).href); }
         if (msg.type === 'stopped') { stopPlayer(); setStatus('Monitoring dihentikan.'); setPlaying(false); }
         if (msg.type === 'scte_data') addLog(msg.data);
       };
