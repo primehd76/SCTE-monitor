@@ -11,10 +11,12 @@ from urllib.parse import urlparse
 
 import threefive
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-APP_VERSION = "preview-ts-hls-2026-08-11"
+APP_VERSION = "preview-mjpeg-2026-08-11"
+CURRENT_PREVIEW_PROC = None
+PREVIEW_LOCK = threading.Lock()
 
 app = FastAPI()
 app.mount("/ui", StaticFiles(directory="frontend"), name="frontend")
@@ -32,6 +34,26 @@ async def root_redirect():
 @app.get("/version")
 async def version():
     return {"version": APP_VERSION}
+
+
+@app.get("/preview.mjpg")
+def preview_mjpg():
+    def stream_preview():
+        with PREVIEW_LOCK:
+            proc = CURRENT_PREVIEW_PROC
+        if not proc or not proc.stdout:
+            return
+        while proc.poll() is None:
+            chunk = proc.stdout.read(64 * 1024)
+            if not chunk:
+                break
+            yield chunk
+
+    return StreamingResponse(
+        stream_preview(),
+        media_type="multipart/x-mixed-replace; boundary=ffmpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 class UDPReader:
@@ -207,6 +229,15 @@ def add_udp_options(url: str):
     return f"{url.replace('udp://@', 'udp://')}{separator}fifo_size=5000000&overrun_nonfatal=1"
 
 
+def create_pipe_scte_reader(url: str):
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
+        "-i", add_udp_options(url), "-map", "0", "-c", "copy", "-f", "mpegts", "pipe:1",
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return PipeReader(proc.stdout), proc
+
+
 def scte_listener(stop_event, loop, websocket_client, reader):
     try:
         stream = threefive.Stream(reader)
@@ -272,6 +303,7 @@ async def wait_for_playlist(playlist, proc, timeout=12):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    global CURRENT_PREVIEW_PROC
     await websocket.accept()
     preview_proc = None
     scte_proc = None
@@ -283,9 +315,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def stop_current():
         nonlocal preview_proc, scte_proc, udp_forwarder
+        global CURRENT_PREVIEW_PROC
         stop_event.set()
         if udp_forwarder:
             udp_forwarder.close()
+        with PREVIEW_LOCK:
+            if CURRENT_PREVIEW_PROC is preview_proc:
+                CURRENT_PREVIEW_PROC = None
         stop_process(preview_proc)
         stop_process(scte_proc)
         preview_proc = None
@@ -336,35 +372,24 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "message": f"UDP listener gagal: {exc}"})
                     continue
 
-            session_name, live_dir = reset_hls_session_dir()
-            playlist_name = "index.m3u8"
-            playlist = live_dir / playlist_name
-            segment_pattern = "seg_%06d.ts"
             preview_cmd = [
                 "ffmpeg", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
                 "-flags", "low_delay", "-i", input_url,
-                # Browser preview served directly by FastAPI, so it does not depend on MediaMTX.
-                "-map", "0:v:0?", "-map", "0:a:0?", "-c:v", "libx264",
-                "-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "baseline", "-level:v", "4.0",
-                "-vf", "yadif=0:-1:0,scale='min(1280,iw)':-2,format=yuv420p",
-                "-g", "50", "-sc_threshold", "0",
-                "-c:a", "aac", "-b:a", "128k",
-                "-f", "hls", "-hls_time", "1", "-hls_list_size", "8",
-                "-hls_flags", "delete_segments+omit_endlist+program_date_time",
-                "-hls_segment_filename", segment_pattern, playlist_name,
+                "-map", "0:v:0", "-an",
+                "-vf", "yadif=0:-1:0,scale='min(960,iw)':-2,fps=12",
+                "-q:v", "5", "-f", "mpjpeg", "-boundary_tag", "ffmpeg", "pipe:1",
             ]
-            if not is_udp_input:
-                preview_cmd.extend(["-map", "0", "-c", "copy", "-f", "mpegts", "pipe:1"])
             try:
                 preview_proc = subprocess.Popen(
                     preview_cmd,
-                    cwd=str(live_dir),
                     stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE if not is_udp_input else subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
+                with PREVIEW_LOCK:
+                    CURRENT_PREVIEW_PROC = preview_proc
                 if not is_udp_input:
-                    scte_reader = PipeReader(preview_proc.stdout)
+                    scte_reader, scte_proc = create_pipe_scte_reader(url)
             except OSError as exc:
                 if scte_reader:
                     scte_reader.close()
@@ -379,13 +404,16 @@ async def websocket_endpoint(websocket: WebSocket):
             if udp_forwarder:
                 forwarder_thread = threading.Thread(target=udp_forwarder.run, args=(stop_event,), daemon=True)
                 forwarder_thread.start()
-            await websocket.send_json({"type": "scte_status", "status": "UDP DIRECT" if is_udp_input else "PIPE"})
-            preview_ready, preview_error = await wait_for_playlist(playlist, preview_proc)
-            if not preview_ready:
+            await asyncio.sleep(0.5)
+            if preview_proc.poll() is not None:
+                stderr = preview_proc.stderr.read() if preview_proc.stderr else b""
+                if isinstance(stderr, bytes):
+                    stderr = stderr.decode(errors="replace")
                 await stop_current()
-                await websocket.send_json({"type": "error", "message": f"Preview gagal: {preview_error}"})
+                await websocket.send_json({"type": "error", "message": f"Preview gagal: {stderr.strip() or 'FFmpeg berhenti'}"})
                 continue
-            await websocket.send_json({"type": "ready", "url": f"/hls/{session_name}/index.m3u8?t={int(time.time())}"})
+            await websocket.send_json({"type": "scte_status", "status": "UDP DIRECT" if is_udp_input else "PIPE"})
+            await websocket.send_json({"type": "ready", "url": f"/preview.mjpg?t={int(time.time())}", "engine": "mjpeg"})
 
     except WebSocketDisconnect:
         await stop_current()

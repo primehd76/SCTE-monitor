@@ -17,6 +17,7 @@
     <section class="lg:col-span-7 bg-black rounded border border-gray-800 flex items-center justify-center relative min-h-[320px] overflow-hidden">
       <span id="placeholder" class="text-gray-600 font-bold tracking-widest">NO SIGNAL</span>
       <video id="video" controls autoplay muted playsinline class="absolute inset-0 w-full h-full hidden object-contain"></video>
+      <img id="mjpeg" alt="Preview" class="absolute inset-0 w-full h-full hidden object-contain">
     </section>
     <section class="lg:col-span-5 flex flex-col gap-4 min-h-0">
       <div class="bg-gray-900 border border-gray-800 p-4 rounded text-sm space-y-2">
@@ -49,14 +50,16 @@
         if (msg.type === 'status') setStatus(msg.message);
         if (msg.type === 'error') { setStatus(msg.message); setPlaying(false); }
         if (msg.type === 'info') { if (msg.data.status === 'ok') { $('f-fmt').textContent = msg.data.format; $('f-vcodec').textContent = msg.data.vcodec; $('f-acodec').textContent = msg.data.acodec; setScteBadge(msg.data.has_scte ? 'PID FOUND' : 'MONITORING'); } else { setStatus(msg.data.msg); setPlaying(false); } }
-        if (msg.type === 'ready') { setStatus('Stream aktif. Menunggu preview...'); startPlayer(new URL(msg.url, location.origin).href); }
+        if (msg.type === 'ready') { setStatus('Preview MJPEG aktif.'); startPlayer(new URL(msg.url, location.origin).href, msg.engine); }
         if (msg.type === 'stopped') { stopPlayer(); setStatus('Monitoring dihentikan.'); setPlaying(false); }
         if (msg.type === 'scte_status') setScteBadge(msg.status);
         if (msg.type === 'scte_data') addLog(msg.data);
       };
     }
-    function startPlayer(url) {
-      $('placeholder').classList.add('hidden'); video.classList.remove('hidden');
+    function startPlayer(url, engine) {
+      $('placeholder').classList.add('hidden');
+      if (engine === 'mjpeg') { if (hls) { hls.destroy(); hls = null; } video.classList.add('hidden'); video.pause(); video.removeAttribute('src'); $('mjpeg').src = url; $('mjpeg').classList.remove('hidden'); return; }
+      video.classList.remove('hidden'); $('mjpeg').classList.add('hidden'); $('mjpeg').removeAttribute('src');
       if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = url; video.play().catch(() => {}); return; }
       if (!window.Hls) { setStatus('Preview gagal: hls.js lokal tidak termuat.'); return; }
       if (!Hls.isSupported()) { setStatus('Preview gagal: browser ini tidak mendukung HLS/MSE.'); return; }
@@ -77,7 +80,7 @@
     video.addEventListener('playing', () => setStatus('Preview aktif.'));
     video.addEventListener('error', () => setStatus('Video error: ' + (video.error?.message || video.error?.code || 'unknown')));
     video.addEventListener('stalled', () => setStatus('Preview stalled. Menunggu data video...'));
-    function stopPlayer() { if (hls) { hls.destroy(); hls = null; } video.pause(); video.removeAttribute('src'); video.load(); video.classList.add('hidden'); $('placeholder').classList.remove('hidden'); }
+    function stopPlayer() { if (hls) { hls.destroy(); hls = null; } video.pause(); video.removeAttribute('src'); video.load(); video.classList.add('hidden'); $('mjpeg').removeAttribute('src'); $('mjpeg').classList.add('hidden'); $('placeholder').classList.remove('hidden'); }
     function addLog(data) {
       const info = data.info || data, out = Boolean(info.out_of_network_indicator), duration = info.break_duration ? `${(info.break_duration / 90000).toFixed(1)}s` : '-';
       const tr = document.createElement('tr'); tr.className = 'hover:bg-gray-800';

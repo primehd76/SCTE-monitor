@@ -36,7 +36,7 @@ Cek versi backend yang sedang jalan:
 http://localhost:8000/version
 ```
 
-Versi preview yang benar harus menampilkan `preview-ts-hls-2026-08-11`. Di log container, request preview yang benar akan berbentuk `/hls/live-.../seg_000000.ts`. Kalau masih muncul `/live-.../seg_000000.m4s`, berarti container masih menjalankan image/kode lama.
+Versi preview yang benar harus menampilkan `preview-mjpeg-2026-08-11`. Preview video memakai endpoint `/preview.mjpg`, jadi browser tidak perlu parse HLS.
 
 Contoh input:
 
