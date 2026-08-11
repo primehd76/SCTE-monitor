@@ -7,26 +7,18 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
 <body class="bg-gray-900 text-white h-screen flex flex-col p-4 gap-4 overflow-hidden">
-    <!-- Top Bar -->
     <div class="flex gap-2">
-        <input id="url" type="text" value="rtmp://172.16.72.23/static/PGM" class="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 rounded text-sm focus:outline-none focus:border-blue-500 font-mono">
-        <button id="play" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded font-bold text-sm transition">PLAY</button>
-        <button id="stop" class="bg-red-600 hover:bg-red-500 px-6 py-2 rounded font-bold text-sm hidden transition">STOP</button>
+        <input id="url" type="text" value="rtmp://172.16.72.23/static/PGM" class="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 rounded text-sm font-mono">
+        <button id="play" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded font-bold text-sm">PLAY</button>
+        <button id="stop" class="bg-red-600 hover:bg-red-500 px-6 py-2 rounded font-bold text-sm hidden">STOP</button>
     </div>
 
-    <!-- Main Content -->
     <div class="flex-1 flex gap-4 overflow-hidden">
-        <!-- Left: Preview -->
-        <div class="w-7/12 flex flex-col gap-4">
-            <div class="flex-1 bg-black rounded border border-gray-800 flex items-center justify-center relative overflow-hidden">
-                <span id="placeholder" class="text-gray-600 font-bold tracking-widest">NO SIGNAL</span>
-                <video id="video" controls autoplay muted class="absolute inset-0 w-full h-full hidden object-contain"></video>
-            </div>
+        <div class="w-7/12 bg-black rounded border border-gray-800 flex items-center justify-center relative overflow-hidden">
+            <span id="placeholder" class="text-gray-600 font-bold tracking-widest">NO SIGNAL</span>
+            <video id="video" controls autoplay muted class="absolute inset-0 w-full h-full hidden object-contain"></video>
         </div>
-
-        <!-- Right: Info & SCTE Logs -->
         <div class="w-5/12 flex flex-col gap-4">
-            <!-- Info Box -->
             <div class="bg-gray-800 border border-gray-700 p-4 rounded flex flex-col gap-2 text-sm">
                 <h2 class="font-bold border-b border-gray-700 pb-2 text-gray-400">STREAM INFO</h2>
                 <div class="flex justify-between"><span>Format:</span> <span id="f-fmt" class="text-blue-400 font-bold">-</span></div>
@@ -37,8 +29,6 @@
                     <span id="scte-status" class="bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded font-bold">WAITING</span>
                 </div>
             </div>
-
-            <!-- SCTE Logs Table -->
             <div class="flex-1 bg-gray-800 border border-gray-700 rounded flex flex-col overflow-hidden">
                 <div class="bg-gray-900 p-3 border-b border-gray-700 flex justify-between items-center text-xs">
                     <span class="font-bold text-gray-400">SCTE-35 EVENT LOGS</span>
@@ -47,12 +37,7 @@
                 <div class="flex-1 overflow-y-auto">
                     <table class="w-full text-left text-xs">
                         <thead class="bg-gray-900/50 text-gray-400 sticky top-0">
-                            <tr>
-                                <th class="p-2">Time</th>
-                                <th class="p-2">Event ID</th>
-                                <th class="p-2">Type</th>
-                                <th class="p-2">Duration</th>
-                            </tr>
+                            <tr><th class="p-2">Time</th><th class="p-2">Event ID</th><th class="p-2">Type</th><th class="p-2">Duration</th></tr>
                         </thead>
                         <tbody id="log-body" class="divide-y divide-gray-700"></tbody>
                     </table>
@@ -67,8 +52,7 @@
         let hls = null;
 
         document.getElementById('play').onclick = () => {
-            const streamUrl = document.getElementById('url').value;
-            ws.send(JSON.stringify({action: "play", url: streamUrl}));
+            ws.send(JSON.stringify({action: "play", url: document.getElementById('url').value}));
             document.getElementById('play').classList.add('hidden');
             document.getElementById('stop').classList.remove('hidden');
         };
@@ -78,15 +62,13 @@
             document.getElementById('play').classList.remove('hidden');
             document.getElementById('stop').classList.add('hidden');
             if(hls) { hls.destroy(); hls = null; }
-            video.pause();
-            video.src = "";
+            video.pause(); video.src = "";
             video.classList.add('hidden');
             document.getElementById('placeholder').classList.remove('hidden');
         };
 
         ws.onmessage = (e) => {
             const msg = JSON.parse(e.data);
-            
             if(msg.type === "info" && msg.data.status === "ok") {
                 document.getElementById('f-fmt').innerText = msg.data.format;
                 document.getElementById('f-vcodec').innerText = msg.data.vcodec;
@@ -97,21 +79,13 @@
                 document.getElementById('placeholder').classList.add('hidden');
                 video.classList.remove('hidden');
 
-                // Beri jeda 3 detik agar MediaMTX matang, lalu muat HLS
                 setTimeout(() => {
                     if (Hls.isSupported()) {
                         if(hls) hls.destroy();
-                        hls = new Hls({ debug: false });
+                        hls = new Hls();
                         hls.loadSource(hlsUrl);
                         hls.attachMedia(video);
-                        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                            video.play().catch(err => console.log("Autoplay diblokir browser:", err));
-                        });
-                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                        video.src = hlsUrl;
-                        video.addEventListener('loadedmetadata', () => {
-                            video.play();
-                        });
+                        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(e => {}));
                     }
                 }, 3000);
             }

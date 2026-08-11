@@ -3,6 +3,7 @@ import subprocess
 import json
 import socket
 import threading
+import time
 import threefive
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
@@ -19,71 +20,52 @@ app.mount("/ui", StaticFiles(directory="frontend"), name="frontend")
 class UDPReader:
     def __init__(self, port):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Tambahkan SO_REUSEADDR agar port langsung bisa dipakai ulang jikaCrash/Restart
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             self.sock.bind(("127.0.0.1", port))
-        except Exception:
+        except:
             pass
     def read(self, size):
         try:
             return self.sock.recvfrom(size)[0]
-        except Exception:
+        except:
             return b""
     def close(self):
-        try:
-            self.sock.close()
-        except Exception:
-            pass
-
-def scte_listener(port: int, stop_event: threading.Event, loop, websocket_client):
-    reader = UDPReader(port)
-    st = threefive.Stream(reader)
-    
-    def on_scte(cue):
-        if stop_event.is_set(): return
-        try:
-            data_json = json.loads(cue.get_json())
-            asyncio.run_coroutine_threadsafe(
-                websocket_client.send_json({"type": "scte_data", "data": data_json}), loop
-            )
-        except Exception:
-            pass
-        
-    try:
-        while not stop_event.is_set():
-            st.decode(func=on_scte)
-    except Exception:
-        pass
-    finally:
-        reader.close()
+        try: self.sock.close()
+        except: pass
 
 def get_stream_info(url):
-    # Tambahkan parameter analyzeduration dan probesize agar ffprobe tidak hang di UDP
-    cmd = [
-        "ffprobe", "-v", "quiet", "-print_format", "json", 
-        "-show_streams", "-show_format", 
-        "-analyzeduration", "2000000", "-probesize", "2000000", 
-        url
-    ]
+    cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", "-analyzeduration", "1500000", "-probesize", "1500000", url]
     try:
-        # Perbesar timeout menjadi 12 detik khusus untuk Multicast
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=12)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=8)
         data = json.loads(res.stdout)
-        
         video = next((s for s in data.get('streams', []) if s.get('codec_type') == 'video'), None)
         audio = next((s for s in data.get('streams', []) if s.get('codec_type') == 'audio'), None)
-        
-        if not video: return {"status": "error", "msg": "Video stream tidak ditemukan"}
-        
+        if not video: return {"status": "error", "msg": "Video tidak ditemukan"}
         return {
             "status": "ok",
-            "format": f"{video.get('height', 'unknown')}p{video.get('r_frame_rate', '25/1').split('/')[0]}",
+            "format": f"{video.get('height', 'unknown')}p",
             "vcodec": video.get('codec_name', 'unknown').upper(),
             "acodec": audio.get('codec_name', 'NONE').upper() if audio else "NONE"
         }
     except Exception as e:
         return {"status": "error", "msg": str(e)}
+
+def scte_listener(port: int, stop_event: threading.Event, loop, websocket_client):
+    reader = UDPReader(port)
+    st = threefive.Stream(reader)
+    def on_scte(cue):
+        if stop_event.is_set(): return
+        try:
+            data_json = json.loads(cue.get_json())
+            asyncio.run_coroutine_threadsafe(websocket_client.send_json({"type": "scte_data", "data": data_json}), loop)
+        except: pass
+    try:
+        while not stop_event.is_set():
+            st.decode(func=on_scte)
+    except: pass
+    finally:
+        reader.close()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -97,75 +79,41 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_json()
             if data["action"] == "play":
                 url = data["url"]
+                stop_event.set()
+                if proc: 
+                    proc.terminate()
+                    proc = None
                 stop_event.clear()
                 
                 info = get_stream_info(url)
                 await websocket.send_json({"type": "info", "data": info})
-                
                 if info["status"] == "error": continue
                 
-                # Pengaman wajib untuk UDP Multicast agar tidak tersedak buffer
-                if url.startswith("udp://"):
-                    if "?" in url and "fifo_size" not in url:
-                        url += "&fifo_size=5000000&overrun_nonfatal=1"
-                    elif "?" not in url:
-                        url += "?fifo_size=5000000&overrun_nonfatal=1"
-                
-                # --- FFMPEG PINTAR (Otomatis menyesuaikan format) ---
-                vcodec = info.get("vcodec", "")
-                acodec = info.get("acodec", "")
-                
-                # 1. Jalur Output ke Web (MediaMTX)
+                if url.startswith("udp://") and "?" not in url:
+                    url += "?fifo_size=5000000&overrun_nonfatal=1"
+                elif url.startswith("udp://") and "fifo_size" not in url:
+                    url += "&fifo_size=5000000&overrun_nonfatal=1"
+
+                # Perintah FFmpeg universal: aman untuk RTMP, SRT, maupun UDP Multicast
                 cmd = [
-                    "ffmpeg", "-hide_banner", "-loglevel", "warning", "-i", url,
-                    "-map", "0:v:0?", "-map", "0:a:0?"
-                ]
-                
-                # Logika Video: Copy jika sudah H.264, Transcode jika format lawas
-                if vcodec == "H264":
-                    cmd.extend(["-c:v", "copy"])
-                else:
-                    cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency"])
-                
-                # Logika Audio: Copy jika sudah AAC, ubah ke AAC jika belum
-                if acodec == "AAC":
-                    cmd.extend(["-c:a", "copy"])
-                else:
-                    cmd.extend(["-c:a", "aac"])
-                    
-                cmd.extend(["-f", "rtsp", "rtsp://127.0.0.1:8554/live"])
-                
-                # 2. Jalur Output ke Sensor SCTE-35 (Abaikan EPG/Subtitle, HANYA ambil Video dan SCTE)
-                cmd.extend([
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
+                    "-map", "0:v:0?", "-map", "0:a:0?",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+                    "-c:a", "aac",
+                    "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:8554/live",
                     "-map", "0:v:0?", "-map", "0:d?", 
                     "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9999"
-                ])
+                ]
                 
-                # Eksekusi dengan penangkap error log agar kelihatan jika ffmpeg crash
-                proc = subprocess.Popen(
-                    cmd, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE
-                )
-                
-                # Cek instan apakah ffmpeg langsung mati dalam 1 detik pertama
-                import time
-                time.sleep(1.0)
-                if proc.poll() is not None:
-                    err_output = proc.stderr.read().decode()
-                    print(f"FFMPEG CRASH ERROR: {err_output}")
-                
-                threading.Thread(
-                    target=scte_listener, 
-                    args=(9999, stop_event, loop, websocket), 
-                    daemon=True
-                ).start()
-                
+                proc = subprocess.Popen(cmd)
+                threading.Thread(target=scte_listener, args=(9999, stop_event, loop, websocket), daemon=True).start()
                 await websocket.send_json({"type": "ready"})
                 
             elif data["action"] == "stop":
                 stop_event.set()
-                if proc: proc.terminate()
+                if proc:
+                    proc.terminate()
+                    proc = None
                 await websocket.send_json({"type": "stopped"})
     except WebSocketDisconnect:
         stop_event.set()
